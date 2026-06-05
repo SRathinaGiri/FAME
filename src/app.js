@@ -10,7 +10,8 @@ const state = {
   accounts: [],
   recent: [],
   trialBalance: [],
-  installPrompt: null
+  installPrompt: null,
+  serviceWorkerReloaded: sessionStorage.getItem('fame-sw-reloaded') === '1'
 };
 
 const els = {
@@ -391,7 +392,18 @@ async function boot() {
     addVoucherLine();
   }
   if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('/sw.js').catch((error) => console.warn('Service worker registration failed', error));
+    const swUrl = `${import.meta.env.BASE_URL}sw.js`;
+    navigator.serviceWorker
+      .register(swUrl, { scope: import.meta.env.BASE_URL })
+      .then(async (registration) => {
+        await navigator.serviceWorker.ready;
+        if (!window.crossOriginIsolated && !state.serviceWorkerReloaded) {
+          sessionStorage.setItem('fame-sw-reloaded', '1');
+          window.location.reload();
+        }
+        return registration;
+      })
+      .catch((error) => console.warn('Service worker registration failed', error));
   }
 }
 

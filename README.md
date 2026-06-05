@@ -34,3 +34,18 @@ npm run preview
 ```
 
 The app is static after build and can be hosted by any server that sends the required isolation headers for OPFS.
+
+## GitHub Pages
+
+Pushing to `main` deploys the app to GitHub Pages with the `/FAME/` base path:
+
+```text
+https://srathingiri.github.io/FAME/
+```
+
+GitHub Pages does not provide configurable COOP/COEP response headers. F.A.M.E therefore uses:
+
+- OPFS-backed SQLite when the host/browser supports the required isolation headers
+- IndexedDB-mirrored SQLite fallback on GitHub Pages, so installed mobile use can still keep local data
+
+Encrypted export/import remains the recommended backup path before changing phones, clearing browser storage, or reinstalling.

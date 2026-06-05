@@ -5,8 +5,12 @@ let sqlite3;
 let db;
 let readyPromise;
 let persistence = 'starting';
+let mirrorToIndexedDb = false;
 
 const TABLES = ['settings', 'accounts', 'vouchers', 'voucher_lines'];
+const IDB_NAME = 'fame-sqlite-fallback';
+const IDB_STORE = 'snapshots';
+const IDB_KEY = 'latest';
 
 const seedAccounts = [
   ['1000', 'Assets', 'asset', null, 'debit', 1],
@@ -54,6 +58,54 @@ function transaction(callback) {
   } catch (error) {
     exec('ROLLBACK');
     throw error;
+  }
+}
+
+function openSnapshotStore() {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open(IDB_NAME, 1);
+    request.onupgradeneeded = () => {
+      request.result.createObjectStore(IDB_STORE);
+    };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error || new Error('Could not open IndexedDB snapshot store.'));
+  });
+}
+
+async function readIndexedDbSnapshot() {
+  const idb = await openSnapshotStore();
+  return new Promise((resolve, reject) => {
+    const tx = idb.transaction(IDB_STORE, 'readonly');
+    const request = tx.objectStore(IDB_STORE).get(IDB_KEY);
+    request.onsuccess = () => resolve(request.result || null);
+    request.onerror = () => reject(request.error || new Error('Could not read local snapshot.'));
+    tx.oncomplete = () => idb.close();
+    tx.onerror = () => {
+      idb.close();
+      reject(tx.error || new Error('Could not read local snapshot.'));
+    };
+  });
+}
+
+async function writeIndexedDbSnapshot(snapshot) {
+  const idb = await openSnapshotStore();
+  return new Promise((resolve, reject) => {
+    const tx = idb.transaction(IDB_STORE, 'readwrite');
+    tx.objectStore(IDB_STORE).put(snapshot, IDB_KEY);
+    tx.oncomplete = () => {
+      idb.close();
+      resolve();
+    };
+    tx.onerror = () => {
+      idb.close();
+      reject(tx.error || new Error('Could not write local snapshot.'));
+    };
+  });
+}
+
+async function persistIfMirrored() {
+  if (mirrorToIndexedDb) {
+    await writeIndexedDbSnapshot(exportData());
   }
 }
 
@@ -121,18 +173,37 @@ function ensureSchema() {
 async function init() {
   if (readyPromise) return readyPromise;
   readyPromise = (async () => {
+    const isGitHubPagesBuild = self.location.pathname.includes('/FAME/');
     sqlite3 = await sqlite3InitModule({
+      disable: {
+        vfs: {
+          opfs: isGitHubPagesBuild,
+          'opfs-sahpool': true,
+          'opfs-wl': true
+        }
+      },
       print: () => {},
       printErr: (...args) => console.error(...args)
     });
-    if ('opfs' in sqlite3) {
+    if (!isGitHubPagesBuild && 'opfs' in sqlite3) {
       db = new sqlite3.oo1.OpfsDb('/fame.sqlite3', 'ct');
       persistence = 'OPFS persistent SQLite database';
     } else {
       db = new sqlite3.oo1.DB('/fame.sqlite3', 'ct');
-      persistence = 'Transient SQLite database; OPFS unavailable';
+      mirrorToIndexedDb = true;
+      persistence = isGitHubPagesBuild
+        ? 'IndexedDB-mirrored SQLite fallback for GitHub Pages'
+        : 'IndexedDB-mirrored SQLite fallback; OPFS unavailable';
     }
     ensureSchema();
+    if (mirrorToIndexedDb) {
+      const snapshot = await readIndexedDbSnapshot();
+      if (snapshot?.app === 'F.A.M.E' && snapshot.schemaVersion === SCHEMA_VERSION) {
+        replaceData(snapshot);
+      } else {
+        await persistIfMirrored();
+      }
+    }
     return { sqliteVersion: sqlite3.version.libVersion, persistence };
   })();
   return readyPromise;
@@ -147,7 +218,7 @@ function listAccounts() {
   `);
 }
 
-function createAccount(account) {
+async function createAccount(account) {
   const code = String(account.code || '').trim();
   const name = String(account.name || '').trim();
   if (!code || !name) throw new Error('Account code and name are required.');
@@ -166,6 +237,7 @@ function createAccount(account) {
       ]
     );
   });
+  await persistIfMirrored();
   return listAccounts();
 }
 
@@ -176,7 +248,7 @@ function nextVoucherNo(type, date) {
   return `${prefix}-${String((row?.count || 0) + 1).padStart(4, '0')}`;
 }
 
-function saveVoucher(voucher) {
+async function saveVoucher(voucher) {
   const lines = (voucher.lines || []).filter((line) => line.accountId);
   if (!voucher.type || !voucher.voucherDate) throw new Error('Voucher type and date are required.');
   if (lines.length < 2) throw new Error('A voucher needs at least two posting lines.');
@@ -218,6 +290,7 @@ function saveVoucher(voucher) {
       );
     });
   });
+  await persistIfMirrored();
   return { id, voucherNo };
 }
 
@@ -272,7 +345,7 @@ function exportData() {
   };
 }
 
-function importData(backup) {
+function replaceData(backup) {
   if (!backup || backup.app !== 'F.A.M.E' || backup.schemaVersion !== SCHEMA_VERSION || !backup.data) {
     throw new Error('Backup format or schema version is not compatible.');
   }
@@ -343,6 +416,11 @@ function importData(backup) {
   } finally {
     exec('PRAGMA foreign_keys = ON');
   }
+}
+
+async function importData(backup) {
+  replaceData(backup);
+  await persistIfMirrored();
   return getSnapshot();
 }
 
