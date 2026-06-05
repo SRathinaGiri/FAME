@@ -109,49 +109,98 @@
             </section>
             <section class="panel">
               <div class="panel-heading">
-                <h2>Add Account</h2>
+                <h2>CoA Masters</h2>
               </div>
-              <form id="accountForm" class="form-grid">
-                <input id="coaItemId" type="hidden">
-                <label>
-                  Master
-                  <select id="coaLevel" required>
-                    <option value="head">Head Account</option>
-                    <option value="subhead">Sub-head Account</option>
-                    <option value="account">Account</option>
-                  </select>
-                </label>
+              <form id="headForm" class="form-grid">
+                <input id="headItemId" type="hidden">
+                <h3>Head Account</h3>
                 <label>
                   Account Type
-                  <select id="accountType"></select>
-                </label>
-                <label>
-                  Head Account
-                  <select id="headAccount"></select>
-                </label>
-                <label>
-                  Sub-head Account
-                  <select id="subheadAccount"></select>
+                  <select id="headType" required></select>
                 </label>
                 <label>
                   Code
-                  <input id="accountCode" required autocomplete="off" placeholder="Auto generated">
+                  <input id="headCode" required autocomplete="off" placeholder="Auto generated">
                 </label>
                 <label>
                   Name
-                  <input id="accountName" required autocomplete="off" placeholder="Petty Cash">
+                  <input id="headName" required autocomplete="off" placeholder="Cash and Bank">
                 </label>
                 <label>
                   Tags
-                  <select id="accountTags" multiple></select>
+                  <select id="headTags" multiple></select>
+                </label>
+                <div class="action-row">
+                  <button type="submit">Save Head</button>
+                  <button id="deleteHead" type="button" class="secondary">Delete</button>
+                  <button id="clearHead" type="button" class="secondary">Clear</button>
+                </div>
+              </form>
+
+              <form id="subheadForm" class="form-grid separated-form">
+                <input id="subheadItemId" type="hidden">
+                <h3>Sub-head Account</h3>
+                <label>
+                  Account Type
+                  <select id="subheadType" required></select>
+                </label>
+                <label>
+                  Head Account
+                  <select id="subheadHead" required></select>
+                </label>
+                <label>
+                  Code
+                  <input id="subheadCode" required autocomplete="off" placeholder="Auto generated">
+                </label>
+                <label>
+                  Name
+                  <input id="subheadName" required autocomplete="off" placeholder="Cash">
+                </label>
+                <label>
+                  Tags
+                  <select id="subheadTags" multiple></select>
+                </label>
+                <div class="action-row">
+                  <button type="submit">Save Sub-head</button>
+                  <button id="deleteSubhead" type="button" class="secondary">Delete</button>
+                  <button id="clearSubhead" type="button" class="secondary">Clear</button>
+                </div>
+              </form>
+
+              <form id="postingAccountForm" class="form-grid separated-form">
+                <input id="accountItemId" type="hidden">
+                <h3>Account</h3>
+                <label>
+                  Account Type
+                  <select id="accountEntryType" required></select>
+                </label>
+                <label>
+                  Head Account
+                  <select id="accountEntryHead" required></select>
+                </label>
+                <label>
+                  Sub-head Account
+                  <select id="accountEntrySubhead" required></select>
+                </label>
+                <label>
+                  Code
+                  <input id="accountEntryCode" required autocomplete="off" placeholder="Auto generated">
+                </label>
+                <label>
+                  Name
+                  <input id="accountEntryName" required autocomplete="off" placeholder="Petty Cash">
+                </label>
+                <label>
+                  Tags
+                  <select id="accountEntryTags" multiple></select>
                 </label>
                 <p class="field-note">
-                  Fixed hierarchy: Account Type -> Head Account -> Sub-head Account -> Account. Only Accounts are available in voucher entry.
+                  Codes use 6 digits: type, head, sub-head, account. Only Accounts are available in voucher entry.
                 </p>
                 <div class="action-row">
-                  <button type="submit">Save Master</button>
-                  <button id="deleteCoaItem" type="button" class="secondary">Delete</button>
-                  <button id="clearCoaForm" type="button" class="secondary">Clear</button>
+                  <button type="submit">Save Account</button>
+                  <button id="deleteAccount" type="button" class="secondary">Delete</button>
+                  <button id="clearAccount" type="button" class="secondary">Clear</button>
                 </div>
               </form>
             </section>

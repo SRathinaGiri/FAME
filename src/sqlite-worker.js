@@ -1,8 +1,8 @@
 import sqlite3InitModule from './vendor/sqlite/index.mjs';
 
-const SCHEMA_VERSION = 3;
-const DB_FILE = '/fame-v3.sqlite3';
-const IDB_NAME = 'fame-sqlite-fallback-v3';
+const SCHEMA_VERSION = 4;
+const DB_FILE = '/fame-v4.sqlite3';
+const IDB_NAME = 'fame-sqlite-fallback-v4';
 const IDB_STORE = 'snapshots';
 const IDB_KEY = 'latest';
 const TABLES = [
@@ -25,57 +25,57 @@ let persistence = 'starting';
 let mirrorToIndexedDb = false;
 
 const seedTypes = [
-  ['asset', 'Assets', 'debit', 1000],
-  ['liability', 'Liabilities', 'credit', 2000],
-  ['equity', 'Equity', 'credit', 3000],
-  ['income', 'Income', 'credit', 4000],
-  ['expense', 'Expenses', 'debit', 5000]
+  ['asset', 'Assets', 'debit', 100000],
+  ['liability', 'Liabilities', 'credit', 200000],
+  ['equity', 'Equity', 'credit', 300000],
+  ['income', 'Income', 'credit', 400000],
+  ['expense', 'Expenses', 'debit', 500000]
 ];
 
 const seedHeads = [
-  ['1100', 'Cash and Bank', 'asset'],
-  ['1200', 'Receivables', 'asset'],
-  ['1300', 'Inventory', 'asset'],
-  ['2100', 'Payables', 'liability'],
-  ['2200', 'Duties and Taxes', 'liability'],
-  ['3100', 'Capital', 'equity'],
-  ['3200', 'Retained Earnings', 'equity'],
-  ['4100', 'Sales', 'income'],
-  ['4200', 'Service Income', 'income'],
-  ['5100', 'Purchases', 'expense'],
-  ['5200', 'Operating Expenses', 'expense']
+  ['101000', 'Cash and Bank', 'asset'],
+  ['102000', 'Receivables', 'asset'],
+  ['103000', 'Inventory', 'asset'],
+  ['201000', 'Payables', 'liability'],
+  ['202000', 'Duties and Taxes', 'liability'],
+  ['301000', 'Capital', 'equity'],
+  ['302000', 'Retained Earnings', 'equity'],
+  ['401000', 'Sales', 'income'],
+  ['402000', 'Service Income', 'income'],
+  ['501000', 'Purchases', 'expense'],
+  ['502000', 'Operating Expenses', 'expense']
 ];
 
 const seedSubheads = [
-  ['1110', 'Cash', '1100'],
-  ['1120', 'Bank', '1100'],
-  ['1210', 'Accounts Receivable', '1200'],
-  ['1310', 'Stock', '1300'],
-  ['2110', 'Accounts Payable', '2100'],
-  ['2210', 'Duties and Taxes Payable', '2200'],
-  ['3110', 'Owner Capital', '3100'],
-  ['3210', 'Retained Earnings', '3200'],
-  ['4110', 'Product Sales', '4100'],
-  ['4210', 'Service Income', '4200'],
-  ['5110', 'Purchase Accounts', '5100'],
-  ['5210', 'Rent', '5200'],
-  ['5220', 'Salary', '5200']
+  ['101100', 'Cash', '101000'],
+  ['101200', 'Bank', '101000'],
+  ['102100', 'Accounts Receivable', '102000'],
+  ['103100', 'Stock', '103000'],
+  ['201100', 'Accounts Payable', '201000'],
+  ['202100', 'Duties and Taxes Payable', '202000'],
+  ['301100', 'Owner Capital', '301000'],
+  ['302100', 'Retained Earnings', '302000'],
+  ['401100', 'Product Sales', '401000'],
+  ['402100', 'Service Income', '402000'],
+  ['501100', 'Purchase Accounts', '501000'],
+  ['502100', 'Rent', '502000'],
+  ['502200', 'Salary', '502000']
 ];
 
 const seedAccounts = [
-  ['1111', 'Cash in Hand', '1110'],
-  ['1121', 'Bank Account', '1120'],
-  ['1211', 'General Customer', '1210'],
-  ['1311', 'Inventory Stock', '1310'],
-  ['2111', 'General Supplier', '2110'],
-  ['2211', 'Tax Payable', '2210'],
-  ['3111', 'Owner Capital', '3110'],
-  ['3211', 'Retained Earnings', '3210'],
-  ['4111', 'Sales', '4110'],
-  ['4211', 'Service Income', '4210'],
-  ['5111', 'Purchases', '5110'],
-  ['5211', 'Rent Expense', '5210'],
-  ['5221', 'Salary Expense', '5220']
+  ['101101', 'Cash in Hand', '101100'],
+  ['101201', 'Bank Account', '101200'],
+  ['102101', 'General Customer', '102100'],
+  ['103101', 'Inventory Stock', '103100'],
+  ['201101', 'General Supplier', '201100'],
+  ['202101', 'Tax Payable', '202100'],
+  ['301101', 'Owner Capital', '301100'],
+  ['302101', 'Retained Earnings', '302100'],
+  ['401101', 'Sales', '401100'],
+  ['402101', 'Service Income', '402100'],
+  ['501101', 'Purchases', '501100'],
+  ['502101', 'Rent Expense', '502100'],
+  ['502201', 'Salary Expense', '502200']
 ];
 
 function exec(sql, bind) {
@@ -380,28 +380,44 @@ function replaceVoucherTagLinks(voucherId, tagIds = []) {
   }
 }
 
+function codeNumber(row) {
+  const value = Number(row.code);
+  return Number.isFinite(value) ? value : 0;
+}
+
+function sixDigit(value) {
+  return String(value).padStart(6, '0');
+}
+
 function nextCode({ level, typeId, headId, subheadId }) {
-  let codes = [];
-  let fallback = 1000;
   if (level === 'head') {
     const type = one('SELECT base_code AS baseCode FROM account_types WHERE id = ?', [typeId]);
-    fallback = type?.baseCode || 1000;
-    codes = all('SELECT code FROM head_accounts WHERE type_id = ?', [typeId]);
-    const max = Math.max(fallback, ...codes.map((row) => Number(row.code)).filter(Number.isFinite));
-    return String(max === fallback && !codes.length ? fallback : max + 100);
+    const typeBase = Number(type?.baseCode || 100000);
+    const typeDigit = Math.floor(typeBase / 100000);
+    const codes = all('SELECT code FROM head_accounts WHERE type_id = ?', [typeId]).map(codeNumber);
+    const usedSegments = codes.map((code) => Math.floor((code % 100000) / 1000));
+    const nextSegment = Math.max(0, ...usedSegments) + 1;
+    if (nextSegment > 99) throw new Error('This account type has reached the 99 head-account code limit.');
+    return sixDigit(typeDigit * 100000 + nextSegment * 1000);
   }
   if (level === 'subhead') {
     const head = one('SELECT code FROM head_accounts WHERE id = ?', [headId]);
-    fallback = Number(head?.code || 1000) + 10;
-    codes = all('SELECT code FROM subhead_accounts WHERE head_id = ?', [headId]);
-    const max = Math.max(fallback - 10, ...codes.map((row) => Number(row.code)).filter(Number.isFinite));
-    return String(max + 10);
+    const headCode = Number(head?.code || 100000);
+    const prefix = Math.floor(headCode / 1000) * 1000;
+    const codes = all('SELECT code FROM subhead_accounts WHERE head_id = ?', [headId]).map(codeNumber);
+    const usedSegments = codes.map((code) => Math.floor((code % 1000) / 100));
+    const nextSegment = Math.max(0, ...usedSegments) + 1;
+    if (nextSegment > 9) throw new Error('This head account has reached the 9 sub-head code limit.');
+    return sixDigit(prefix + nextSegment * 100);
   }
   const subhead = one('SELECT code FROM subhead_accounts WHERE id = ?', [subheadId]);
-  fallback = Number(subhead?.code || 1000) + 1;
-  codes = all('SELECT code FROM accounts WHERE subhead_id = ?', [subheadId]);
-  const max = Math.max(fallback - 1, ...codes.map((row) => Number(row.code)).filter(Number.isFinite));
-  return String(max + 1);
+  const subheadCode = Number(subhead?.code || 100000);
+  const prefix = Math.floor(subheadCode / 100) * 100;
+  const codes = all('SELECT code FROM accounts WHERE subhead_id = ?', [subheadId]).map(codeNumber);
+  const usedSegments = codes.map((code) => code % 100);
+  const nextSegment = Math.max(0, ...usedSegments) + 1;
+  if (nextSegment > 99) throw new Error('This sub-head account has reached the 99 account code limit.');
+  return sixDigit(prefix + nextSegment);
 }
 
 async function suggestCoaCode(payload) {
@@ -413,6 +429,7 @@ async function saveCoaItem(item) {
   const code = String(item.code || '').trim();
   const name = String(item.name || '').trim();
   if (!code || !name) throw new Error('Code and name are required.');
+  if (!/^\d{6}$/.test(code)) throw new Error('Account code must be exactly 6 digits.');
   transaction(() => {
     if (level === 'head') {
       if (!item.typeId) throw new Error('Account type is required.');
@@ -515,9 +532,9 @@ async function setVoucherTags({ voucherId, tagIds }) {
 
 function accountMatchesFilter(account, filter) {
   if (!filter || filter === 'all') return true;
-  if (filter === 'cashBank') return account.headCode === '1100';
-  if (filter === 'purchase') return account.typeId === 'expense' && account.headCode === '5100';
-  if (filter === 'sales') return account.typeId === 'income' && ['4100', '4200'].includes(account.headCode);
+  if (filter === 'cashBank') return account.headCode === '101000';
+  if (filter === 'purchase') return account.typeId === 'expense' && account.headCode === '501000';
+  if (filter === 'sales') return account.typeId === 'income' && ['401000', '402000'].includes(account.headCode);
   return true;
 }
 

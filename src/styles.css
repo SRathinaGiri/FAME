@@ -260,6 +260,11 @@ th {
   padding: 18px;
 }
 
+.form-grid h3 {
+  margin: 0;
+  font-size: 15px;
+}
+
 .form-grid.compact {
   grid-template-columns: repeat(3, minmax(0, 1fr));
   padding: 0;
@@ -360,32 +365,86 @@ select:disabled {
   padding: 8px 0;
 }
 
-.tree-row {
+.tree-node {
+  border-bottom: 1px solid var(--line);
+}
+
+.tree-node .tree-node {
+  border-bottom: 0;
+}
+
+.tree-summary {
   display: grid;
-  grid-template-columns: 84px minmax(180px, 1fr) 92px minmax(120px, auto);
+  grid-template-columns: 18px minmax(0, 1fr);
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-height: auto;
+  padding: 0;
+  color: var(--ink);
+  cursor: pointer;
+  list-style: none;
+}
+
+.tree-summary::-webkit-details-marker {
+  display: none;
+}
+
+.tree-summary.type,
+.tree-summary.head,
+.tree-summary.subhead {
+  background: #f8fafc;
+}
+
+.tree-node[open] > .tree-summary .tree-caret {
+  transform: rotate(90deg);
+}
+
+.tree-caret {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 38px;
+  color: var(--muted);
+  font-size: 12px;
+  transition: transform 0.12s ease;
+}
+
+.tree-action {
+  display: grid;
+  grid-template-columns: 96px minmax(180px, 1fr) 92px minmax(120px, auto);
   align-items: center;
   gap: 12px;
   width: 100%;
-  min-height: auto;
-  padding: 10px 18px 10px calc(18px + var(--depth) * 22px);
+  min-height: 38px;
+  padding: 8px 18px 8px 0;
   border: 0;
-  border-bottom: 1px solid var(--line);
   border-radius: 0;
   background: transparent;
   color: var(--ink);
+  font-weight: inherit;
   text-align: left;
   cursor: pointer;
 }
 
-.tree-row:hover {
-  background: #f8fafc;
+.tree-action:disabled {
+  cursor: default;
 }
 
-.tree-row.type,
-.tree-row.head,
-.tree-row.subhead {
+.tree-action:not(:disabled):hover {
+  background: #eef4ff;
+}
+
+.tree-node.type > .tree-summary,
+.tree-node.head > .tree-summary,
+.tree-node.subhead > .tree-summary {
   font-weight: 800;
-  background: #f8fafc;
+}
+
+.tree-node.head,
+.tree-node.subhead,
+.tree-node.account {
+  margin-left: 22px;
 }
 
 .account-code,
@@ -523,6 +582,10 @@ select:disabled {
 
   .tree-row {
     grid-template-columns: 72px minmax(140px, 1fr);
+  }
+
+  .tree-action {
+    grid-template-columns: 78px minmax(130px, 1fr);
   }
 
   .account-type,

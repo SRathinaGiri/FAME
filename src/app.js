@@ -32,17 +32,33 @@ const els = {
   recentVouchers: document.querySelector('#recentVouchers'),
   trialBalanceRows: document.querySelector('#trialBalanceRows'),
   accountTree: document.querySelector('#accountTree'),
-  accountForm: document.querySelector('#accountForm'),
-  coaItemId: document.querySelector('#coaItemId'),
-  coaLevel: document.querySelector('#coaLevel'),
-  accountType: document.querySelector('#accountType'),
-  headAccount: document.querySelector('#headAccount'),
-  subheadAccount: document.querySelector('#subheadAccount'),
-  accountCode: document.querySelector('#accountCode'),
-  accountName: document.querySelector('#accountName'),
-  accountTags: document.querySelector('#accountTags'),
-  deleteCoaItem: document.querySelector('#deleteCoaItem'),
-  clearCoaForm: document.querySelector('#clearCoaForm'),
+  headForm: document.querySelector('#headForm'),
+  headItemId: document.querySelector('#headItemId'),
+  headType: document.querySelector('#headType'),
+  headCode: document.querySelector('#headCode'),
+  headName: document.querySelector('#headName'),
+  headTags: document.querySelector('#headTags'),
+  deleteHead: document.querySelector('#deleteHead'),
+  clearHead: document.querySelector('#clearHead'),
+  subheadForm: document.querySelector('#subheadForm'),
+  subheadItemId: document.querySelector('#subheadItemId'),
+  subheadType: document.querySelector('#subheadType'),
+  subheadHead: document.querySelector('#subheadHead'),
+  subheadCode: document.querySelector('#subheadCode'),
+  subheadName: document.querySelector('#subheadName'),
+  subheadTags: document.querySelector('#subheadTags'),
+  deleteSubhead: document.querySelector('#deleteSubhead'),
+  clearSubhead: document.querySelector('#clearSubhead'),
+  postingAccountForm: document.querySelector('#postingAccountForm'),
+  accountItemId: document.querySelector('#accountItemId'),
+  accountEntryType: document.querySelector('#accountEntryType'),
+  accountEntryHead: document.querySelector('#accountEntryHead'),
+  accountEntrySubhead: document.querySelector('#accountEntrySubhead'),
+  accountEntryCode: document.querySelector('#accountEntryCode'),
+  accountEntryName: document.querySelector('#accountEntryName'),
+  accountEntryTags: document.querySelector('#accountEntryTags'),
+  deleteAccount: document.querySelector('#deleteAccount'),
+  clearAccount: document.querySelector('#clearAccount'),
   voucherForm: document.querySelector('#voucherForm'),
   voucherType: document.querySelector('#voucherType'),
   voucherDate: document.querySelector('#voucherDate'),
@@ -128,9 +144,9 @@ function accountLabel(account) {
 
 function accountMatchesFilter(account, filter) {
   if (!filter || filter === 'all') return true;
-  if (filter === 'cashBank') return account.headCode === '1100';
-  if (filter === 'purchase') return account.typeId === 'expense' && account.headCode === '5100';
-  if (filter === 'sales') return account.typeId === 'income' && ['4100', '4200'].includes(account.headCode);
+  if (filter === 'cashBank') return account.headCode === '101000';
+  if (filter === 'purchase') return account.typeId === 'expense' && account.headCode === '501000';
+  if (filter === 'sales') return account.typeId === 'income' && ['401000', '402000'].includes(account.headCode);
   return true;
 }
 
@@ -145,105 +161,159 @@ function currentCoaTagIds(level, id) {
   return state.coaTags[level]?.[id] || [];
 }
 
-function renderCoaMasters() {
-  renderOptions(els.accountType, state.accountTypes, { label: (type) => type.name });
-  renderOptions(els.headAccount, filteredHeads(), { label: (head) => `${head.code} - ${head.name}` });
-  renderOptions(els.subheadAccount, filteredSubheads(), { label: (subhead) => `${subhead.code} - ${subhead.name}` });
-  renderTagOptions(els.accountTags);
-  updateCoaFieldVisibility();
+function headsForType(typeId) {
+  return state.heads.filter((head) => !typeId || head.typeId === typeId);
 }
 
-function filteredHeads() {
-  return state.heads.filter((head) => !els.accountType.value || head.typeId === els.accountType.value);
+function subheadsForHead(headId) {
+  return state.subheads.filter((subhead) => !headId || subhead.headId === headId);
 }
 
-function filteredSubheads() {
-  return state.subheads.filter((subhead) => !els.headAccount.value || subhead.headId === els.headAccount.value);
+function renderHeadOptions(select, typeId, selected = null) {
+  renderOptions(select, headsForType(typeId), { label: (head) => `${head.code} - ${head.name}`, selected });
 }
 
-async function suggestCode() {
-  const payload = {
-    level: els.coaLevel.value,
-    typeId: els.accountType.value,
-    headId: els.headAccount.value,
-    subheadId: els.subheadAccount.value
-  };
+function renderSubheadOptions(select, headId, selected = null) {
+  renderOptions(select, subheadsForHead(headId), { label: (subhead) => `${subhead.code} - ${subhead.name}`, selected });
+}
+
+async function suggestCode(level, controls) {
+  const payload = { level, typeId: controls.type?.value, headId: controls.head?.value, subheadId: controls.subhead?.value };
   const result = await dbCall('suggestCoaCode', payload);
-  els.accountCode.value = result.code;
-  els.accountCode.placeholder = result.code;
+  controls.code.value = result.code;
+  controls.code.placeholder = result.code;
 }
 
-function updateCoaFieldVisibility() {
-  const level = els.coaLevel.value;
-  els.accountType.closest('label').classList.toggle('hidden', level !== 'head');
-  els.headAccount.closest('label').classList.toggle('hidden', level === 'head');
-  els.subheadAccount.closest('label').classList.toggle('hidden', level !== 'account');
-  els.deleteCoaItem.disabled = !els.coaItemId.value;
-  if (!els.coaItemId.value) suggestCode().catch(() => undefined);
+const coaForms = {
+  head: () => ({
+    form: els.headForm,
+    id: els.headItemId,
+    type: els.headType,
+    code: els.headCode,
+    name: els.headName,
+    tags: els.headTags,
+    deleteButton: els.deleteHead
+  }),
+  subhead: () => ({
+    form: els.subheadForm,
+    id: els.subheadItemId,
+    type: els.subheadType,
+    head: els.subheadHead,
+    code: els.subheadCode,
+    name: els.subheadName,
+    tags: els.subheadTags,
+    deleteButton: els.deleteSubhead
+  }),
+  account: () => ({
+    form: els.postingAccountForm,
+    id: els.accountItemId,
+    type: els.accountEntryType,
+    head: els.accountEntryHead,
+    subhead: els.accountEntrySubhead,
+    code: els.accountEntryCode,
+    name: els.accountEntryName,
+    tags: els.accountEntryTags,
+    deleteButton: els.deleteAccount
+  })
+};
+
+function updateCoaButtons() {
+  for (const level of ['head', 'subhead', 'account']) {
+    const controls = coaForms[level]();
+    controls.deleteButton.disabled = !controls.id.value;
+  }
 }
 
-function clearCoaForm() {
-  els.accountForm.reset();
-  els.coaItemId.value = '';
-  els.accountCode.disabled = false;
-  els.subheadAccount.disabled = false;
+function clearCoaForm(level) {
+  const controls = coaForms[level]();
+  controls.form.reset();
+  controls.id.value = '';
+  controls.code.disabled = false;
+  if (controls.subhead) controls.subhead.disabled = false;
   renderCoaMasters();
+}
+
+function renderCoaMasters() {
+  renderOptions(els.headType, state.accountTypes, { label: (type) => type.name });
+  renderOptions(els.subheadType, state.accountTypes, { label: (type) => type.name });
+  renderHeadOptions(els.subheadHead, els.subheadType.value);
+  renderOptions(els.accountEntryType, state.accountTypes, { label: (type) => type.name });
+  renderHeadOptions(els.accountEntryHead, els.accountEntryType.value);
+  renderSubheadOptions(els.accountEntrySubhead, els.accountEntryHead.value);
+  renderTagOptions(els.headTags);
+  renderTagOptions(els.subheadTags);
+  renderTagOptions(els.accountEntryTags);
+  updateCoaButtons();
+  if (!els.headItemId.value) suggestCode('head', coaForms.head()).catch(() => undefined);
+  if (!els.subheadItemId.value) suggestCode('subhead', coaForms.subhead()).catch(() => undefined);
+  if (!els.accountItemId.value) suggestCode('account', coaForms.account()).catch(() => undefined);
 }
 
 function fillCoaForm(row) {
   if (!row || row.level === 'type') return;
-  els.coaItemId.value = row.id;
-  els.coaLevel.value = row.level;
+  const controls = coaForms[row.level]();
+  controls.id.value = row.id;
   if (row.level === 'head') {
-    els.accountType.value = row.typeId;
+    controls.type.value = row.typeId;
   } else if (row.level === 'subhead') {
     const head = state.heads.find((item) => item.id === row.headId);
-    els.accountType.value = head?.typeId || '';
-    renderOptions(els.headAccount, filteredHeads(), { label: (headRow) => `${headRow.code} - ${headRow.name}` });
-    els.headAccount.value = row.headId;
+    controls.type.value = head?.typeId || '';
+    renderHeadOptions(controls.head, controls.type.value, row.headId);
   } else {
     const subhead = state.subheads.find((item) => item.id === row.subheadId);
     const head = state.heads.find((item) => item.id === subhead?.headId);
-    els.accountType.value = head?.typeId || '';
-    renderOptions(els.headAccount, filteredHeads(), { label: (headRow) => `${headRow.code} - ${headRow.name}` });
-    els.headAccount.value = head?.id || '';
-    renderOptions(els.subheadAccount, filteredSubheads(), { label: (subheadRow) => `${subheadRow.code} - ${subheadRow.name}` });
-    els.subheadAccount.value = row.subheadId;
+    controls.type.value = head?.typeId || '';
+    renderHeadOptions(controls.head, controls.type.value, head?.id || '');
+    renderSubheadOptions(controls.subhead, controls.head.value, row.subheadId);
   }
-  els.accountCode.value = row.code;
-  els.accountName.value = row.name;
-  renderTagOptions(els.accountTags, currentCoaTagIds(row.level, row.id));
+  controls.code.value = row.code;
+  controls.name.value = row.name;
+  renderTagOptions(controls.tags, currentCoaTagIds(row.level, row.id));
   const lockAccountStructure = row.level === 'account' && row.hasTransactions;
-  els.accountCode.disabled = lockAccountStructure;
-  els.subheadAccount.disabled = lockAccountStructure;
-  updateCoaFieldVisibility();
+  controls.code.disabled = lockAccountStructure;
+  if (controls.subhead) controls.subhead.disabled = lockAccountStructure;
+  updateCoaButtons();
+  controls.form.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 }
 
 function renderTree() {
-  els.accountTree.innerHTML = state.coaRows
-    .map((row) => {
-      const tagIds = row.level === 'type' ? [] : currentCoaTagIds(row.level, row.id);
-      return `
-        <button class="tree-row ${row.level}" type="button" data-level="${row.level}" data-id="${row.id}" style="--depth:${depthForLevel(row.level)}">
-          <span class="account-code">${row.code}</span>
-          <span>${row.name}</span>
-          <span class="account-type">${levelLabel(row.level)}</span>
-          <span class="tag-cell">${renderTagChips(tagIds)}</span>
-        </button>
-      `;
-    })
+  const typeRows = state.coaRows.filter((row) => row.level === 'type');
+  els.accountTree.innerHTML = typeRows
+    .map((type) => treeDetails(type, state.coaRows.filter((head) => head.level === 'head' && head.parentId === type.id)))
     .join('');
-  els.accountTree.querySelectorAll('.tree-row').forEach((button) => {
+  els.accountTree.querySelectorAll('.tree-action').forEach((button) => {
     button.addEventListener('click', () => fillCoaForm(state.coaRows.find((row) => row.level === button.dataset.level && row.id === button.dataset.id)));
   });
 }
 
-function depthForLevel(level) {
-  return { type: 0, head: 1, subhead: 2, account: 3 }[level] || 0;
-}
-
 function levelLabel(level) {
   return { type: 'Type', head: 'Head', subhead: 'Sub-head', account: 'Account' }[level] || level;
+}
+
+function treeDetails(row, children) {
+  const isType = row.level === 'type';
+  const isLeaf = !children.length;
+  const tagIds = isType ? [] : currentCoaTagIds(row.level, row.id);
+  const childMarkup = children.map((child) => {
+    const childRows =
+      child.level === 'head'
+        ? state.coaRows.filter((subhead) => subhead.level === 'subhead' && subhead.parentId === child.id)
+        : state.coaRows.filter((account) => account.level === 'account' && account.parentId === child.id);
+    return treeDetails(child, childRows);
+  }).join('');
+  const content = `
+    <summary class="tree-summary ${row.level}">
+      <span class="tree-caret">${isLeaf ? '' : '>'}</span>
+      <button class="tree-action" type="button" data-level="${row.level}" data-id="${row.id}" ${isType ? 'disabled' : ''}>
+        <span class="account-code">${row.code}</span>
+        <span>${row.name}</span>
+        <span class="account-type">${levelLabel(row.level)}</span>
+        <span class="tag-cell">${renderTagChips(tagIds)}</span>
+      </button>
+    </summary>
+    ${childMarkup ? `<div class="tree-children">${childMarkup}</div>` : ''}
+  `;
+  return `<details class="tree-node ${row.level}" ${isType ? 'open' : ''}>${content}</details>`;
 }
 
 function renderDashboard() {
@@ -281,18 +351,18 @@ function renderDashboard() {
 }
 
 function lineDefaultsForType(type) {
-  if (type === 'receipt') return [{ accountFilter: 'cashBank', lockedSide: 'debit', preferredCodes: ['1111', '1121'], selectFirst: true }, { lockedSide: 'credit' }];
-  if (type === 'payment') return [{ accountFilter: 'cashBank', lockedSide: 'credit', preferredCodes: ['1111', '1121'], selectFirst: true }, { lockedSide: 'debit' }];
-  if (type === 'purchase') return [{ accountFilter: 'purchase', lockedSide: 'debit', preferredCodes: ['5111'], selectFirst: true }, { lockedSide: 'credit' }];
-  if (type === 'sales') return [{ accountFilter: 'sales', lockedSide: 'credit', preferredCodes: ['4111', '4211'], selectFirst: true }, { lockedSide: 'debit' }];
+  if (type === 'receipt') return [{ accountFilter: 'cashBank', lockedSide: 'debit', preferredCodes: ['101101', '101201'], selectFirst: true }, { lockedSide: 'credit' }];
+  if (type === 'payment') return [{ accountFilter: 'cashBank', lockedSide: 'credit', preferredCodes: ['101101', '101201'], selectFirst: true }, { lockedSide: 'debit' }];
+  if (type === 'purchase') return [{ accountFilter: 'purchase', lockedSide: 'debit', preferredCodes: ['501101'], selectFirst: true }, { lockedSide: 'credit' }];
+  if (type === 'sales') return [{ accountFilter: 'sales', lockedSide: 'credit', preferredCodes: ['401101', '402101'], selectFirst: true }, { lockedSide: 'debit' }];
   return [{}, {}];
 }
 
 function addedLineDefaultForType(type) {
   if (type === 'receipt') return { lockedSide: 'credit' };
   if (type === 'payment') return { lockedSide: 'debit' };
-  if (type === 'purchase') return { lockedSide: 'credit', preferredCodes: ['2111', '1111', '1121'] };
-  if (type === 'sales') return { lockedSide: 'debit', preferredCodes: ['1211', '1111', '1121'] };
+  if (type === 'purchase') return { lockedSide: 'credit', preferredCodes: ['201101', '101101', '101201'] };
+  if (type === 'sales') return { lockedSide: 'debit', preferredCodes: ['102101', '101101', '101201'] };
   return {};
 }
 
@@ -444,41 +514,67 @@ function downloadJson(filename, data) {
   URL.revokeObjectURL(url);
 }
 
+async function saveCoaForm(level) {
+  const controls = coaForms[level]();
+  await dbCall('saveCoaItem', {
+    id: controls.id.value || null,
+    level,
+    typeId: controls.type?.value,
+    headId: controls.head?.value,
+    subheadId: controls.subhead?.value,
+    code: controls.code.value,
+    name: controls.name.value,
+    tagIds: selectedValues(controls.tags)
+  });
+  clearCoaForm(level);
+  await refreshSnapshot();
+  showToast(`${levelLabel(level)} saved.`);
+}
+
+async function deleteCoaForm(level) {
+  const controls = coaForms[level]();
+  await dbCall('deleteCoaItem', { id: controls.id.value, level });
+  clearCoaForm(level);
+  await refreshSnapshot();
+  showToast(`${levelLabel(level)} deleted.`);
+}
+
 function bindEvents() {
   els.navTabs.forEach((tab) => tab.addEventListener('click', () => switchView(tab.dataset.view)));
-  els.coaLevel.addEventListener('change', clearCoaForm);
-  els.accountType.addEventListener('change', () => {
-    renderOptions(els.headAccount, filteredHeads(), { label: (head) => `${head.code} - ${head.name}` });
-    updateCoaFieldVisibility();
+  els.headType.addEventListener('change', () => suggestCode('head', coaForms.head()).catch(() => undefined));
+  els.subheadType.addEventListener('change', () => {
+    renderHeadOptions(els.subheadHead, els.subheadType.value);
+    suggestCode('subhead', coaForms.subhead()).catch(() => undefined);
   });
-  els.headAccount.addEventListener('change', () => {
-    renderOptions(els.subheadAccount, filteredSubheads(), { label: (subhead) => `${subhead.code} - ${subhead.name}` });
-    updateCoaFieldVisibility();
+  els.subheadHead.addEventListener('change', () => suggestCode('subhead', coaForms.subhead()).catch(() => undefined));
+  els.accountEntryType.addEventListener('change', () => {
+    renderHeadOptions(els.accountEntryHead, els.accountEntryType.value);
+    renderSubheadOptions(els.accountEntrySubhead, els.accountEntryHead.value);
+    suggestCode('account', coaForms.account()).catch(() => undefined);
   });
-  els.subheadAccount.addEventListener('change', updateCoaFieldVisibility);
-  els.clearCoaForm.addEventListener('click', clearCoaForm);
-  els.accountForm.addEventListener('submit', async (event) => {
+  els.accountEntryHead.addEventListener('change', () => {
+    renderSubheadOptions(els.accountEntrySubhead, els.accountEntryHead.value);
+    suggestCode('account', coaForms.account()).catch(() => undefined);
+  });
+  els.accountEntrySubhead.addEventListener('change', () => suggestCode('account', coaForms.account()).catch(() => undefined));
+  els.clearHead.addEventListener('click', () => clearCoaForm('head'));
+  els.clearSubhead.addEventListener('click', () => clearCoaForm('subhead'));
+  els.clearAccount.addEventListener('click', () => clearCoaForm('account'));
+  els.headForm.addEventListener('submit', async (event) => {
     event.preventDefault();
-    await dbCall('saveCoaItem', {
-      id: els.coaItemId.value || null,
-      level: els.coaLevel.value,
-      typeId: els.accountType.value,
-      headId: els.headAccount.value,
-      subheadId: els.subheadAccount.value,
-      code: els.accountCode.value,
-      name: els.accountName.value,
-      tagIds: selectedValues(els.accountTags)
-    });
-    clearCoaForm();
-    await refreshSnapshot();
-    showToast('CoA master saved.');
+    await saveCoaForm('head');
   });
-  els.deleteCoaItem.addEventListener('click', async () => {
-    await dbCall('deleteCoaItem', { id: els.coaItemId.value, level: els.coaLevel.value });
-    clearCoaForm();
-    await refreshSnapshot();
-    showToast('CoA master deleted.');
+  els.subheadForm.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    await saveCoaForm('subhead');
   });
+  els.postingAccountForm.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    await saveCoaForm('account');
+  });
+  els.deleteHead.addEventListener('click', () => deleteCoaForm('head'));
+  els.deleteSubhead.addEventListener('click', () => deleteCoaForm('subhead'));
+  els.deleteAccount.addEventListener('click', () => deleteCoaForm('account'));
 
   els.voucherType.addEventListener('change', resetVoucherLinesForType);
   els.addLine.addEventListener('click', () => addVoucherLine(addedLineDefaultForType(els.voucherType.value)));
