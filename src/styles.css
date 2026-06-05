@@ -365,11 +365,25 @@ select:disabled {
   grid-template-columns: 84px minmax(180px, 1fr) 92px minmax(120px, auto);
   align-items: center;
   gap: 12px;
+  width: 100%;
+  min-height: auto;
   padding: 10px 18px 10px calc(18px + var(--depth) * 22px);
+  border: 0;
   border-bottom: 1px solid var(--line);
+  border-radius: 0;
+  background: transparent;
+  color: var(--ink);
+  text-align: left;
+  cursor: pointer;
 }
 
-.tree-row.group {
+.tree-row:hover {
+  background: #f8fafc;
+}
+
+.tree-row.type,
+.tree-row.head,
+.tree-row.subhead {
   font-weight: 800;
   background: #f8fafc;
 }
