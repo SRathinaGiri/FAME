@@ -1,0 +1,269 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#1f3a5f">
+    <meta name="description" content="F.A.M.E local-first financial accounting PWA">
+    <title>F.A.M.E</title>
+    <link rel="manifest" href="/manifest.webmanifest">
+    <link rel="icon" href="/icons/fame-icon.svg" type="image/svg+xml">
+    <link rel="stylesheet" href="/src/styles.css">
+  </head>
+  <body>
+    <div id="app" class="app-shell">
+      <aside class="sidebar">
+        <div class="brand">
+          <div class="brand-mark">F</div>
+          <div>
+            <strong>F.A.M.E</strong>
+            <span>Financial Accounting</span>
+          </div>
+        </div>
+        <nav class="nav-tabs" aria-label="Main navigation">
+          <button class="nav-tab active" data-view="dashboard">Dashboard</button>
+          <button class="nav-tab" data-view="coa">Chart of Accounts</button>
+          <button class="nav-tab" data-view="entries">Entries</button>
+          <button class="nav-tab" data-view="backup">Backup</button>
+        </nav>
+        <div class="storage-status" id="storageStatus">Starting database...</div>
+      </aside>
+
+      <main class="main-panel">
+        <header class="topbar">
+          <div>
+            <p class="eyebrow">Local-first accounting</p>
+            <h1 id="viewTitle">Dashboard</h1>
+          </div>
+          <button id="installButton" class="secondary hidden" type="button">Install App</button>
+        </header>
+
+        <section class="view active" id="dashboardView">
+          <div class="metric-grid">
+            <article class="metric">
+              <span>Total Debit</span>
+              <strong id="totalDebit">0.00</strong>
+            </article>
+            <article class="metric">
+              <span>Total Credit</span>
+              <strong id="totalCredit">0.00</strong>
+            </article>
+            <article class="metric">
+              <span>Trial Balance</span>
+              <strong id="balanceStatus">Balanced</strong>
+            </article>
+            <article class="metric">
+              <span>Accounts</span>
+              <strong id="accountCount">0</strong>
+            </article>
+          </div>
+
+          <div class="split-grid">
+            <section class="panel">
+              <div class="panel-heading">
+                <h2>Recent Vouchers</h2>
+              </div>
+              <div class="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>No.</th>
+                      <th>Date</th>
+                      <th>Type</th>
+                      <th class="amount">Amount</th>
+                    </tr>
+                  </thead>
+                  <tbody id="recentVouchers"></tbody>
+                </table>
+              </div>
+            </section>
+            <section class="panel">
+              <div class="panel-heading">
+                <h2>Trial Balance</h2>
+              </div>
+              <div class="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Account</th>
+                      <th class="amount">Debit</th>
+                      <th class="amount">Credit</th>
+                    </tr>
+                  </thead>
+                  <tbody id="trialBalanceRows"></tbody>
+                </table>
+              </div>
+            </section>
+          </div>
+        </section>
+
+        <section class="view" id="coaView">
+          <div class="split-grid">
+            <section class="panel">
+              <div class="panel-heading">
+                <h2>Account Hierarchy</h2>
+              </div>
+              <div id="accountTree" class="account-tree"></div>
+            </section>
+            <section class="panel">
+              <div class="panel-heading">
+                <h2>Add Account</h2>
+              </div>
+              <form id="accountForm" class="form-grid">
+                <label>
+                  Code
+                  <input id="accountCode" required autocomplete="off" placeholder="1105">
+                </label>
+                <label>
+                  Name
+                  <input id="accountName" required autocomplete="off" placeholder="Petty Cash">
+                </label>
+                <label>
+                  Type
+                  <select id="accountType" required>
+                    <option value="asset">Asset</option>
+                    <option value="liability">Liability</option>
+                    <option value="equity">Equity</option>
+                    <option value="income">Income</option>
+                    <option value="expense">Expense</option>
+                  </select>
+                </label>
+                <label>
+                  Parent
+                  <select id="accountParent"></select>
+                </label>
+                <label>
+                  Normal Side
+                  <select id="accountNormalSide">
+                    <option value="debit">Debit</option>
+                    <option value="credit">Credit</option>
+                  </select>
+                </label>
+                <label class="checkbox-row">
+                  <input id="accountIsGroup" type="checkbox">
+                  Group account
+                </label>
+                <button type="submit">Create Account</button>
+              </form>
+            </section>
+          </div>
+        </section>
+
+        <section class="view" id="entriesView">
+          <section class="panel">
+            <div class="panel-heading">
+              <h2>Voucher Entry</h2>
+              <span id="voucherBalance" class="pill">Balanced</span>
+            </div>
+            <form id="voucherForm" class="voucher-form">
+              <div class="form-grid compact">
+                <label>
+                  Voucher Type
+                  <select id="voucherType">
+                    <option value="receipt">Receipt</option>
+                    <option value="payment">Payment</option>
+                    <option value="purchase">Purchase Invoice</option>
+                    <option value="sales">Sales Invoice</option>
+                    <option value="journal">Journal</option>
+                  </select>
+                </label>
+                <label>
+                  Date
+                  <input id="voucherDate" type="date" required>
+                </label>
+                <label>
+                  Reference
+                  <input id="referenceNo" autocomplete="off" placeholder="Cheque, UPI, bill ref">
+                </label>
+                <label>
+                  Invoice No.
+                  <input id="invoiceNo" autocomplete="off" placeholder="For purchase or sales">
+                </label>
+                <label>
+                  Invoice Date
+                  <input id="invoiceDate" type="date">
+                </label>
+                <label>
+                  Narration
+                  <input id="narration" autocomplete="off" placeholder="Short description">
+                </label>
+              </div>
+
+              <div class="quick-entry">
+                <div class="quick-row">
+                  <label>
+                    Counter Account
+                    <select id="quickCounter"></select>
+                  </label>
+                  <label>
+                    Cash / Bank / Party
+                    <select id="quickSettlement"></select>
+                  </label>
+                  <label>
+                    Amount
+                    <input id="quickAmount" inputmode="decimal" placeholder="0.00">
+                  </label>
+                  <button id="applyTemplate" type="button" class="secondary">Apply Pattern</button>
+                </div>
+              </div>
+
+              <div class="table-wrap line-editor">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Account</th>
+                      <th>Description</th>
+                      <th class="amount">Debit</th>
+                      <th class="amount">Credit</th>
+                      <th></th>
+                    </tr>
+                  </thead>
+                  <tbody id="voucherLines"></tbody>
+                </table>
+              </div>
+              <div class="action-row">
+                <button id="addLine" type="button" class="secondary">Add Line</button>
+                <button type="submit">Post Voucher</button>
+              </div>
+            </form>
+          </section>
+        </section>
+
+        <section class="view" id="backupView">
+          <div class="split-grid">
+            <section class="panel">
+              <div class="panel-heading">
+                <h2>Encrypted Export</h2>
+              </div>
+              <form id="exportForm" class="form-grid">
+                <label>
+                  Backup Password
+                  <input id="exportPassword" type="password" minlength="8" required autocomplete="new-password">
+                </label>
+                <button type="submit">Export Backup</button>
+              </form>
+            </section>
+            <section class="panel">
+              <div class="panel-heading">
+                <h2>Encrypted Import</h2>
+              </div>
+              <form id="importForm" class="form-grid">
+                <label>
+                  Backup File
+                  <input id="importFile" type="file" accept="application/json,.json" required>
+                </label>
+                <label>
+                  Backup Password
+                  <input id="importPassword" type="password" minlength="8" required autocomplete="current-password">
+                </label>
+                <button type="submit">Import Backup</button>
+              </form>
+            </section>
+          </div>
+        </section>
+      </main>
+    </div>
+    <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
+    <script type="module" src="/src/app.js"></script>
+  </body>
+</html>

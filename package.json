@@ -1,0 +1,25 @@
+{
+  "name": "fame",
+  "version": "0.1.0",
+  "description": "F.A.M.E - Financial Accounting under Mobile Environment",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "build": "vite build",
+    "preview": "vite preview --host 127.0.0.1"
+  },
+  "keywords": [
+    "accounting",
+    "pwa",
+    "sqlite",
+    "opfs"
+  ],
+  "author": "",
+  "license": "UNLICENSED",
+  "private": true,
+  "dependencies": {
+    "@sqlite.org/sqlite-wasm": "^3.53.0-build1",
+    "vite": "^8.0.16"
+  },
+  "devDependencies": {}
+}

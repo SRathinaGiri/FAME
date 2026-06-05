@@ -1,0 +1,17 @@
+{
+  "name": "F.A.M.E - Financial Accounting under Mobile Environment",
+  "short_name": "F.A.M.E",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#f4f7fb",
+  "theme_color": "#1f3a5f",
+  "icons": [
+    {
+      "src": "/icons/fame-icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
