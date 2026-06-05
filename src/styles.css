@@ -250,6 +250,10 @@ th {
   text-align: center;
 }
 
+.muted-text {
+  color: var(--muted);
+}
+
 .form-grid {
   display: grid;
   gap: 14px;
@@ -278,6 +282,10 @@ select {
   padding: 8px 10px;
   background: #fff;
   color: var(--ink);
+}
+
+select[multiple] {
+  min-height: 96px;
 }
 
 input:focus,
@@ -311,13 +319,50 @@ select:disabled {
   line-height: 1.45;
 }
 
+.separated-form {
+  border-top: 1px solid var(--line);
+}
+
+.tag-list {
+  display: grid;
+  gap: 0;
+}
+
+.tag-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 18px;
+  border-bottom: 1px solid var(--line);
+}
+
+.tag-chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  border: 1px solid color-mix(in srgb, var(--tag-color) 50%, #ffffff);
+  border-radius: 999px;
+  padding: 2px 9px;
+  background: color-mix(in srgb, var(--tag-color) 14%, #ffffff);
+  color: var(--primary-strong);
+  font-size: 12px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.empty-list {
+  padding: 18px;
+  color: var(--muted);
+}
+
 .account-tree {
   padding: 8px 0;
 }
 
 .tree-row {
   display: grid;
-  grid-template-columns: 84px minmax(180px, 1fr) 92px;
+  grid-template-columns: 84px minmax(180px, 1fr) 92px minmax(120px, auto);
   align-items: center;
   gap: 12px;
   padding: 10px 18px 10px calc(18px + var(--depth) * 22px);
@@ -334,6 +379,13 @@ select:disabled {
   color: var(--muted);
   font-size: 12px;
   text-transform: uppercase;
+}
+
+.tag-cell {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  flex-wrap: wrap;
 }
 
 .voucher-form {
@@ -453,6 +505,16 @@ select:disabled {
   .split-grid,
   .form-grid.compact {
     grid-template-columns: 1fr;
+  }
+
+  .tree-row {
+    grid-template-columns: 72px minmax(140px, 1fr);
+  }
+
+  .account-type,
+  .tag-cell {
+    grid-column: 2;
+    justify-content: flex-start;
   }
 }
 

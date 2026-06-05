@@ -1,13 +1,13 @@
 import sqlite3InitModule from './vendor/sqlite/index.mjs';
 
-const SCHEMA_VERSION = 1;
+const SCHEMA_VERSION = 2;
 let sqlite3;
 let db;
 let readyPromise;
 let persistence = 'starting';
 let mirrorToIndexedDb = false;
 
-const TABLES = ['settings', 'accounts', 'vouchers', 'voucher_lines'];
+const TABLES = ['settings', 'accounts', 'tags', 'account_tags', 'vouchers', 'voucher_lines', 'voucher_tags'];
 const IDB_NAME = 'fame-sqlite-fallback';
 const IDB_STORE = 'snapshots';
 const IDB_KEY = 'latest';
@@ -149,9 +149,28 @@ function ensureSchema() {
       sort_order INTEGER NOT NULL DEFAULT 0,
       CHECK ((debit_minor = 0 AND credit_minor > 0) OR (credit_minor = 0 AND debit_minor > 0))
     );
+    CREATE TABLE IF NOT EXISTS tags (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL COLLATE NOCASE UNIQUE,
+      color TEXT NOT NULL DEFAULT '#247d68',
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE TABLE IF NOT EXISTS account_tags (
+      account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+      tag_id TEXT NOT NULL REFERENCES tags(id) ON DELETE CASCADE,
+      PRIMARY KEY (account_id, tag_id)
+    );
+    CREATE TABLE IF NOT EXISTS voucher_tags (
+      voucher_id TEXT NOT NULL REFERENCES vouchers(id) ON DELETE CASCADE,
+      tag_id TEXT NOT NULL REFERENCES tags(id) ON DELETE CASCADE,
+      PRIMARY KEY (voucher_id, tag_id)
+    );
     CREATE INDEX IF NOT EXISTS idx_accounts_parent ON accounts(parent_id);
     CREATE INDEX IF NOT EXISTS idx_voucher_lines_voucher ON voucher_lines(voucher_id);
     CREATE INDEX IF NOT EXISTS idx_voucher_lines_account ON voucher_lines(account_id);
+    CREATE INDEX IF NOT EXISTS idx_account_tags_tag ON account_tags(tag_id);
+    CREATE INDEX IF NOT EXISTS idx_voucher_tags_tag ON voucher_tags(tag_id);
   `);
 
   const existing = one('SELECT value FROM settings WHERE key = ?', ['schema_version']);
@@ -166,6 +185,10 @@ function ensureSchema() {
           [crypto.randomUUID(), code, name, type, parent?.id || null, normalSide, isGroup]
         );
       }
+    });
+  } else if (Number(existing.value) < SCHEMA_VERSION) {
+    transaction(() => {
+      exec('UPDATE settings SET value = ? WHERE key = ?', [String(SCHEMA_VERSION), 'schema_version']);
     });
   }
 }
@@ -198,8 +221,9 @@ async function init() {
     ensureSchema();
     if (mirrorToIndexedDb) {
       const snapshot = await readIndexedDbSnapshot();
-      if (snapshot?.app === 'F.A.M.E' && snapshot.schemaVersion === SCHEMA_VERSION) {
+      if (snapshot?.app === 'F.A.M.E' && snapshot.schemaVersion <= SCHEMA_VERSION) {
         replaceData(snapshot);
+        await persistIfMirrored();
       } else {
         await persistIfMirrored();
       }
@@ -218,16 +242,71 @@ function listAccounts() {
   `);
 }
 
+function listTags() {
+  return all(`
+    SELECT id, name, color, created_at AS createdAt, updated_at AS updatedAt
+    FROM tags
+    ORDER BY name COLLATE NOCASE
+  `);
+}
+
+function getTagLinks(tableName, ownerColumn) {
+  const rows = all(`
+    SELECT ${ownerColumn} AS ownerId, tag_id AS tagId
+    FROM ${tableName}
+    ORDER BY ${ownerColumn}, tag_id
+  `);
+  return rows.reduce((map, row) => {
+    if (!map[row.ownerId]) map[row.ownerId] = [];
+    map[row.ownerId].push(row.tagId);
+    return map;
+  }, {});
+}
+
+async function createTag(tag) {
+  const name = String(tag.name || '').trim();
+  const color = String(tag.color || '#247d68').trim() || '#247d68';
+  if (!name) throw new Error('Tag name is required.');
+  transaction(() => {
+    exec('INSERT INTO tags (id, name, color) VALUES (?, ?, ?)', [crypto.randomUUID(), name, color]);
+  });
+  await persistIfMirrored();
+  return listTags();
+}
+
+function replaceTagLinks(tableName, ownerColumn, ownerId, tagIds = []) {
+  exec(`DELETE FROM ${tableName} WHERE ${ownerColumn} = ?`, [ownerId]);
+  for (const tagId of [...new Set(tagIds.filter(Boolean))]) {
+    exec(`INSERT INTO ${tableName} (${ownerColumn}, tag_id) VALUES (?, ?)`, [ownerId, tagId]);
+  }
+}
+
+async function setAccountTags({ accountId, tagIds }) {
+  if (!accountId) throw new Error('Select an account to tag.');
+  transaction(() => replaceTagLinks('account_tags', 'account_id', accountId, tagIds));
+  await persistIfMirrored();
+  return getSnapshot();
+}
+
+async function setVoucherTags({ voucherId, tagIds }) {
+  if (!voucherId) throw new Error('Select a voucher to tag.');
+  transaction(() => replaceTagLinks('voucher_tags', 'voucher_id', voucherId, tagIds));
+  await persistIfMirrored();
+  return getSnapshot();
+}
+
 async function createAccount(account) {
   const code = String(account.code || '').trim();
   const name = String(account.name || '').trim();
   if (!code || !name) throw new Error('Account code and name are required.');
+  let accountId;
   transaction(() => {
+    accountId = crypto.randomUUID();
     exec(
       `INSERT INTO accounts (id, code, name, type, parent_id, normal_side, is_group)
        VALUES (?, ?, ?, ?, ?, ?, ?)`,
       [
-        crypto.randomUUID(),
+        accountId,
         code,
         name,
         account.type,
@@ -236,6 +315,7 @@ async function createAccount(account) {
         account.isGroup ? 1 : 0
       ]
     );
+    replaceTagLinks('account_tags', 'account_id', accountId, account.tagIds || []);
   });
   await persistIfMirrored();
   return listAccounts();
@@ -289,6 +369,7 @@ async function saveVoucher(voucher) {
         ]
       );
     });
+    replaceTagLinks('voucher_tags', 'voucher_id', id, voucher.tagIds || []);
   });
   await persistIfMirrored();
   return { id, voucherNo };
@@ -307,6 +388,16 @@ function getRecentVouchers() {
   `);
 }
 
+function getVoucherList() {
+  return all(`
+    SELECT id, voucher_no AS voucherNo, type, voucher_date AS voucherDate,
+           invoice_no AS invoiceNo, narration
+    FROM vouchers
+    ORDER BY voucher_date DESC, created_at DESC
+    LIMIT 300
+  `);
+}
+
 function getTrialBalance() {
   return all(`
     SELECT a.id, a.code, a.name, a.type,
@@ -322,12 +413,18 @@ function getTrialBalance() {
 
 function getSnapshot() {
   const accounts = listAccounts();
+  const tags = listTags();
   const recent = getRecentVouchers();
+  const vouchers = getVoucherList();
   const trialBalance = getTrialBalance();
   return {
     meta: { persistence, sqliteVersion: sqlite3.version.libVersion },
     accounts,
+    tags,
+    accountTags: getTagLinks('account_tags', 'account_id'),
+    voucherTags: getTagLinks('voucher_tags', 'voucher_id'),
     recent,
+    vouchers,
     trialBalance
   };
 }
@@ -345,15 +442,45 @@ function exportData() {
   };
 }
 
-function replaceData(backup) {
-  if (!backup || backup.app !== 'F.A.M.E' || backup.schemaVersion !== SCHEMA_VERSION || !backup.data) {
-    throw new Error('Backup format or schema version is not compatible.');
+function normalizeBackup(backup) {
+  if (!backup || backup.app !== 'F.A.M.E' || !backup.data) {
+    throw new Error('Backup format is not compatible.');
   }
+  if (backup.schemaVersion > SCHEMA_VERSION) {
+    throw new Error('Backup schema version is newer than this app.');
+  }
+  const normalized = {
+    ...backup,
+    schemaVersion: SCHEMA_VERSION,
+    data: {
+      settings: backup.data.settings || [],
+      accounts: backup.data.accounts || [],
+      tags: backup.data.tags || [],
+      account_tags: backup.data.account_tags || [],
+      vouchers: backup.data.vouchers || [],
+      voucher_lines: backup.data.voucher_lines || [],
+      voucher_tags: backup.data.voucher_tags || []
+    }
+  };
+  const schemaSetting = normalized.data.settings.find((row) => row.key === 'schema_version');
+  if (schemaSetting) {
+    schemaSetting.value = String(SCHEMA_VERSION);
+  } else {
+    normalized.data.settings.push({ key: 'schema_version', value: String(SCHEMA_VERSION) });
+  }
+  return normalized;
+}
+
+function replaceData(backup) {
+  backup = normalizeBackup(backup);
   exec('PRAGMA foreign_keys = OFF');
   try {
     transaction(() => {
       exec('DELETE FROM voucher_lines');
+      exec('DELETE FROM voucher_tags');
       exec('DELETE FROM vouchers');
+      exec('DELETE FROM account_tags');
+      exec('DELETE FROM tags');
       exec('DELETE FROM accounts');
       exec('DELETE FROM settings');
       for (const row of backup.data.settings || []) {
@@ -376,6 +503,16 @@ function replaceData(backup) {
             row.updated_at
           ]
         );
+      }
+      for (const row of backup.data.tags || []) {
+        exec(
+          `INSERT INTO tags (id, name, color, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?)`,
+          [row.id, row.name, row.color || '#247d68', row.created_at, row.updated_at]
+        );
+      }
+      for (const row of backup.data.account_tags || []) {
+        exec('INSERT INTO account_tags (account_id, tag_id) VALUES (?, ?)', [row.account_id, row.tag_id]);
       }
       for (const row of backup.data.vouchers || []) {
         exec(
@@ -408,9 +545,12 @@ function replaceData(backup) {
             row.description,
             row.debit_minor,
             row.credit_minor,
-            row.sort_order
-          ]
-        );
+          row.sort_order
+        ]
+      );
+    }
+      for (const row of backup.data.voucher_tags || []) {
+        exec('INSERT INTO voucher_tags (voucher_id, tag_id) VALUES (?, ?)', [row.voucher_id, row.tag_id]);
       }
     });
   } finally {
@@ -428,6 +568,9 @@ const handlers = {
   init,
   snapshot: getSnapshot,
   createAccount,
+  createTag,
+  setAccountTags,
+  setVoucherTags,
   saveVoucher,
   exportData,
   importData

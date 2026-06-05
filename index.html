@@ -24,6 +24,7 @@
           <button class="nav-tab active" data-view="dashboard">Dashboard</button>
           <button class="nav-tab" data-view="coa">Chart of Accounts</button>
           <button class="nav-tab" data-view="entries">Entries</button>
+          <button class="nav-tab" data-view="tags">Tags</button>
           <button class="nav-tab" data-view="backup">Backup</button>
         </nav>
         <div class="storage-status" id="storageStatus">Starting database...</div>
@@ -70,6 +71,7 @@
                       <th>No.</th>
                       <th>Date</th>
                       <th>Type</th>
+                      <th>Tags</th>
                       <th class="amount">Amount</th>
                     </tr>
                   </thead>
@@ -133,6 +135,10 @@
                   <input id="accountName" required autocomplete="off" placeholder="Petty Cash">
                 </label>
                 <label>
+                  Tags
+                  <select id="accountTags" multiple></select>
+                </label>
+                <label>
                   Normal Side
                   <select id="accountNormalSide">
                     <option value="debit">Debit</option>
@@ -190,6 +196,10 @@
                   Narration
                   <input id="narration" autocomplete="off" placeholder="Short description">
                 </label>
+                <label>
+                  Tags
+                  <select id="voucherTags" multiple></select>
+                </label>
               </div>
 
               <div class="table-wrap line-editor">
@@ -212,6 +222,51 @@
               </div>
             </form>
           </section>
+        </section>
+
+        <section class="view" id="tagsView">
+          <div class="split-grid">
+            <section class="panel">
+              <div class="panel-heading">
+                <h2>Tag List</h2>
+              </div>
+              <div id="tagList" class="tag-list"></div>
+            </section>
+            <section class="panel">
+              <div class="panel-heading">
+                <h2>Manage Tags</h2>
+              </div>
+              <form id="tagForm" class="form-grid">
+                <label>
+                  Tag Name
+                  <input id="tagName" required autocomplete="off" placeholder="Branch A, Project X, Family">
+                </label>
+                <label>
+                  Color
+                  <input id="tagColor" type="color" value="#247d68">
+                </label>
+                <button type="submit">Create Tag</button>
+              </form>
+              <form id="tagAssignmentForm" class="form-grid separated-form">
+                <label>
+                  Tag Target
+                  <select id="tagTargetType">
+                    <option value="account">Account or Heading</option>
+                    <option value="voucher">Voucher</option>
+                  </select>
+                </label>
+                <label>
+                  Target
+                  <select id="tagTarget"></select>
+                </label>
+                <label>
+                  Tags
+                  <select id="tagAssignmentTags" multiple></select>
+                </label>
+                <button type="submit">Save Tags</button>
+              </form>
+            </section>
+          </div>
         </section>
 
         <section class="view" id="backupView">

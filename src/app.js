@@ -8,7 +8,11 @@ const moneyFormatter = new Intl.NumberFormat('en-IN', {
 
 const state = {
   accounts: [],
+  tags: [],
+  accountTags: {},
+  voucherTags: {},
   recent: [],
+  vouchers: [],
   trialBalance: [],
   installPrompt: null,
   serviceWorkerReloaded: sessionStorage.getItem('fame-sw-reloaded') === '1',
@@ -30,6 +34,7 @@ const els = {
   accountForm: document.querySelector('#accountForm'),
   accountCode: document.querySelector('#accountCode'),
   accountName: document.querySelector('#accountName'),
+  accountTags: document.querySelector('#accountTags'),
   accountParent: document.querySelector('#accountParent'),
   accountType: document.querySelector('#accountType'),
   accountNormalSide: document.querySelector('#accountNormalSide'),
@@ -41,6 +46,7 @@ const els = {
   invoiceNo: document.querySelector('#invoiceNo'),
   invoiceDate: document.querySelector('#invoiceDate'),
   narration: document.querySelector('#narration'),
+  voucherTags: document.querySelector('#voucherTags'),
   voucherLines: document.querySelector('#voucherLines'),
   voucherBalance: document.querySelector('#voucherBalance'),
   addLine: document.querySelector('#addLine'),
@@ -49,6 +55,14 @@ const els = {
   exportPassword: document.querySelector('#exportPassword'),
   importPassword: document.querySelector('#importPassword'),
   importFile: document.querySelector('#importFile'),
+  tagList: document.querySelector('#tagList'),
+  tagForm: document.querySelector('#tagForm'),
+  tagName: document.querySelector('#tagName'),
+  tagColor: document.querySelector('#tagColor'),
+  tagAssignmentForm: document.querySelector('#tagAssignmentForm'),
+  tagTargetType: document.querySelector('#tagTargetType'),
+  tagTarget: document.querySelector('#tagTarget'),
+  tagAssignmentTags: document.querySelector('#tagAssignmentTags'),
   installButton: document.querySelector('#installButton'),
   toast: document.querySelector('#toast')
 };
@@ -72,6 +86,33 @@ function showToast(message) {
 
 function accountLabel(account) {
   return `${account.code} - ${account.name}`;
+}
+
+function tagLabel(tag) {
+  return tag.name;
+}
+
+function selectedValues(select) {
+  return [...select.selectedOptions].map((option) => option.value).filter(Boolean);
+}
+
+function renderTagOptions(select, selectedIds = []) {
+  const selected = new Set(selectedIds);
+  select.innerHTML = '';
+  for (const tag of state.tags) {
+    const option = new Option(tagLabel(tag), tag.id);
+    option.selected = selected.has(tag.id);
+    select.append(option);
+  }
+}
+
+function renderTagChips(tagIds = []) {
+  if (!tagIds.length) return '<span class="muted-text">None</span>';
+  return tagIds
+    .map((tagId) => state.tags.find((tag) => tag.id === tagId))
+    .filter(Boolean)
+    .map((tag) => `<span class="tag-chip" style="--tag-color: ${tag.color}">${tag.name}</span>`)
+    .join('');
 }
 
 function leafAccounts() {
@@ -214,6 +255,7 @@ function renderTree() {
         <span class="account-code">${account.code}</span>
         <span>${account.name}</span>
         <span class="account-type">${account.type}</span>
+        <span class="tag-cell">${renderTagChips(state.accountTags[account.id] || [])}</span>
       `;
       fragment.append(row, build(account.id, depth + 1));
     }
@@ -221,6 +263,47 @@ function renderTree() {
   }
 
   els.accountTree.replaceChildren(build());
+}
+
+function renderTagList() {
+  els.tagList.innerHTML = state.tags.length
+    ? state.tags
+        .map(
+          (tag) => `
+            <div class="tag-row">
+              <span class="tag-chip" style="--tag-color: ${tag.color}">${tag.name}</span>
+              <span class="muted-text">${tag.color}</span>
+            </div>
+          `
+        )
+        .join('')
+    : '<div class="empty-list">No tags created yet.</div>';
+}
+
+function renderTagTargets() {
+  const targetType = els.tagTargetType.value;
+  const previousValue = els.tagTarget.value;
+  els.tagTarget.innerHTML = '';
+  if (targetType === 'account') {
+    for (const account of state.accounts) {
+      els.tagTarget.append(new Option(`${accountLabel(account)}${account.isGroup ? ' (heading)' : ''}`, account.id));
+    }
+  } else {
+    for (const voucher of state.vouchers) {
+      els.tagTarget.append(new Option(`${voucher.voucherNo} - ${voucher.voucherDate} - ${voucher.type}`, voucher.id));
+    }
+  }
+  if ([...els.tagTarget.options].some((option) => option.value === previousValue)) {
+    els.tagTarget.value = previousValue;
+  }
+  renderSelectedTargetTags();
+}
+
+function renderSelectedTargetTags() {
+  const targetType = els.tagTargetType.value;
+  const targetId = els.tagTarget.value;
+  const tagIds = targetType === 'account' ? state.accountTags[targetId] || [] : state.voucherTags[targetId] || [];
+  renderTagOptions(els.tagAssignmentTags, tagIds);
 }
 
 function renderDashboard() {
@@ -240,12 +323,13 @@ function renderDashboard() {
               <td>${voucher.voucherNo}</td>
               <td>${voucher.voucherDate}</td>
               <td class="capitalize">${voucher.type}</td>
+              <td>${renderTagChips(state.voucherTags[voucher.id] || [])}</td>
               <td class="amount">${minorToMoney(voucher.amountMinor)}</td>
             </tr>
           `
         )
         .join('')
-    : '<tr><td colspan="4" class="empty">No vouchers posted yet.</td></tr>';
+    : '<tr><td colspan="5" class="empty">No vouchers posted yet.</td></tr>';
 
   els.trialBalanceRows.innerHTML = state.trialBalance.length
     ? state.trialBalance
@@ -376,6 +460,7 @@ function refreshVoucherSelects() {
 
 function resetVoucherForm() {
   els.voucherForm.reset();
+  renderTagOptions(els.voucherTags);
   setDefaultDate();
   resetVoucherLinesForType();
 }
@@ -383,12 +468,20 @@ function resetVoucherForm() {
 async function refreshSnapshot() {
   const snapshot = await dbCall('snapshot');
   state.accounts = snapshot.accounts;
+  state.tags = snapshot.tags || [];
+  state.accountTags = snapshot.accountTags || {};
+  state.voucherTags = snapshot.voucherTags || {};
   state.recent = snapshot.recent;
+  state.vouchers = snapshot.vouchers || [];
   state.trialBalance = snapshot.trialBalance;
   els.storageStatus.textContent = `${snapshot.meta.persistence} | SQLite ${snapshot.meta.sqliteVersion}`;
   renderDashboard();
   renderParentOptions();
   renderTree();
+  renderTagList();
+  renderTagOptions(els.accountTags);
+  renderTagOptions(els.voucherTags);
+  renderTagTargets();
   refreshVoucherSelects();
   updateSuggestedAccountCode();
 }
@@ -429,7 +522,8 @@ function bindEvents() {
       type: els.accountType.value,
       parentId: els.accountParent.value || null,
       normalSide: els.accountNormalSide.value,
-      isGroup: els.accountIsGroup.checked
+      isGroup: els.accountIsGroup.checked,
+      tagIds: selectedValues(els.accountTags)
     });
     els.accountForm.reset();
     state.accountCodeTouched = false;
@@ -445,6 +539,32 @@ function bindEvents() {
     resetVoucherLinesForType();
   });
 
+  els.tagForm.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    await dbCall('createTag', {
+      name: els.tagName.value,
+      color: els.tagColor.value
+    });
+    els.tagForm.reset();
+    els.tagColor.value = '#247d68';
+    await refreshSnapshot();
+    showToast('Tag created.');
+  });
+
+  els.tagTargetType.addEventListener('change', renderTagTargets);
+  els.tagTarget.addEventListener('change', renderSelectedTargetTags);
+  els.tagAssignmentForm.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const payload = { tagIds: selectedValues(els.tagAssignmentTags) };
+    if (els.tagTargetType.value === 'account') {
+      await dbCall('setAccountTags', { accountId: els.tagTarget.value, ...payload });
+    } else {
+      await dbCall('setVoucherTags', { voucherId: els.tagTarget.value, ...payload });
+    }
+    await refreshSnapshot();
+    showToast('Tags saved.');
+  });
+
   els.voucherForm.addEventListener('submit', async (event) => {
     event.preventDefault();
     const lines = getVoucherLines().filter((line) => line.accountId && (line.debitMinor || line.creditMinor));
@@ -455,6 +575,7 @@ function bindEvents() {
       invoiceNo: els.invoiceNo.value.trim(),
       invoiceDate: els.invoiceDate.value,
       narration: els.narration.value.trim(),
+      tagIds: selectedValues(els.voucherTags),
       lines
     });
     await refreshSnapshot();

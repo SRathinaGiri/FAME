@@ -9,6 +9,7 @@ F.A.M.E is a local-first accounting PWA built as a self-contained browser app. T
 - OPFS-first persistence with transient fallback when OPFS is unavailable
 - Hierarchical chart of accounts
 - Receipt, payment, purchase invoice, sales invoice, and journal voucher entry
+- Tags for accounts, heading accounts, and vouchers
 - Trial balance and recent voucher dashboard
 - Password-encrypted JSON backup export/import
 
