@@ -11,7 +11,8 @@ const state = {
   recent: [],
   trialBalance: [],
   installPrompt: null,
-  serviceWorkerReloaded: sessionStorage.getItem('fame-sw-reloaded') === '1'
+  serviceWorkerReloaded: sessionStorage.getItem('fame-sw-reloaded') === '1',
+  accountCodeTouched: false
 };
 
 const els = {
@@ -27,9 +28,12 @@ const els = {
   trialBalanceRows: document.querySelector('#trialBalanceRows'),
   accountTree: document.querySelector('#accountTree'),
   accountForm: document.querySelector('#accountForm'),
+  accountCode: document.querySelector('#accountCode'),
+  accountName: document.querySelector('#accountName'),
   accountParent: document.querySelector('#accountParent'),
   accountType: document.querySelector('#accountType'),
   accountNormalSide: document.querySelector('#accountNormalSide'),
+  accountIsGroup: document.querySelector('#accountIsGroup'),
   voucherForm: document.querySelector('#voucherForm'),
   voucherType: document.querySelector('#voucherType'),
   voucherDate: document.querySelector('#voucherDate'),
@@ -37,10 +41,6 @@ const els = {
   invoiceNo: document.querySelector('#invoiceNo'),
   invoiceDate: document.querySelector('#invoiceDate'),
   narration: document.querySelector('#narration'),
-  quickCounter: document.querySelector('#quickCounter'),
-  quickSettlement: document.querySelector('#quickSettlement'),
-  quickAmount: document.querySelector('#quickAmount'),
-  applyTemplate: document.querySelector('#applyTemplate'),
   voucherLines: document.querySelector('#voucherLines'),
   voucherBalance: document.querySelector('#voucherBalance'),
   addLine: document.querySelector('#addLine'),
@@ -82,8 +82,30 @@ function accountByCode(code) {
   return state.accounts.find((account) => account.code === code);
 }
 
-function renderAccountOptions(select, { includeGroups = false, emptyLabel = null, preferredCodes = [] } = {}) {
-  const accounts = state.accounts.filter((account) => includeGroups || !account.isGroup);
+function isDescendantOf(account, parentCode) {
+  const parent = accountByCode(parentCode);
+  if (!parent) return false;
+  let current = account;
+  while (current?.parentId) {
+    if (current.parentId === parent.id) return true;
+    current = state.accounts.find((candidate) => candidate.id === current.parentId);
+  }
+  return false;
+}
+
+function accountMatchesFilter(account, filter) {
+  if (!filter || filter === 'all') return true;
+  if (filter === 'cashBank') return isDescendantOf(account, '1100') || ['1110', '1120'].includes(account.code);
+  if (filter === 'purchase') return account.code === '5100' || isDescendantOf(account, '5100');
+  if (filter === 'sales') return account.code === '4100' || isDescendantOf(account, '4100');
+  return true;
+}
+
+function renderAccountOptions(
+  select,
+  { includeGroups = false, emptyLabel = null, preferredCodes = [], filter = 'all' } = {}
+) {
+  const accounts = state.accounts.filter((account) => (includeGroups || !account.isGroup) && accountMatchesFilter(account, filter));
   const preferred = preferredCodes
     .map((code) => accounts.find((account) => account.code === code))
     .filter(Boolean);
@@ -98,10 +120,78 @@ function renderAccountOptions(select, { includeGroups = false, emptyLabel = null
 }
 
 function renderParentOptions() {
+  const oldValue = els.accountParent.value;
+  const selectedType = els.accountType.value;
+  const parents = state.accounts.filter((account) => account.type === selectedType && account.isGroup);
   els.accountParent.innerHTML = '';
   els.accountParent.append(new Option('No parent', ''));
-  for (const account of state.accounts) {
+  for (const account of parents) {
     els.accountParent.append(new Option(accountLabel(account), account.id));
+  }
+  if (oldValue && [...els.accountParent.options].some((option) => option.value === oldValue)) {
+    els.accountParent.value = oldValue;
+  } else {
+    const rootParent = parents.find((account) => !account.parentId && account.isGroup);
+    if (rootParent) els.accountParent.value = rootParent.id;
+  }
+}
+
+function suggestRootCode(type) {
+  const baseByType = {
+    asset: 1000,
+    liability: 2000,
+    equity: 3000,
+    income: 4000,
+    expense: 5000
+  };
+  const usedCodes = new Set(
+    state.accounts
+      .filter((account) => account.type === type && /^\d+$/.test(account.code))
+      .map((account) => Number(account.code))
+  );
+  let candidate = baseByType[type] || 1000;
+  while (usedCodes.has(candidate)) candidate += 100;
+  return String(candidate);
+}
+
+function inferNextChildCode(parent, siblings) {
+  const numericCodes = siblings
+    .map((account) => Number(account.code))
+    .filter((code) => Number.isInteger(code) && code > 0)
+    .sort((a, b) => a - b);
+
+  if (!numericCodes.length) {
+    const parentCode = Number(parent.code);
+    const step = parent.code.endsWith('00') ? 100 : 10;
+    return Number.isInteger(parentCode) ? String(parentCode + step) : `${parent.code}10`;
+  }
+
+  const gaps = [];
+  for (let index = 1; index < numericCodes.length; index += 1) {
+    const gap = numericCodes[index] - numericCodes[index - 1];
+    if (gap > 0) gaps.push(gap);
+  }
+  const step = gaps.length ? Math.min(...gaps) : parent.code.endsWith('00') ? 100 : 10;
+  return String(Math.max(...numericCodes) + step);
+}
+
+function suggestAccountCode() {
+  const parent = state.accounts.find((account) => account.id === els.accountParent.value);
+  if (!parent) return suggestRootCode(els.accountType.value);
+  const siblings = state.accounts.filter((account) => account.parentId === parent.id && /^\d+$/.test(account.code));
+  return inferNextChildCode(parent, siblings);
+}
+
+function updateSuggestedAccountCode({ force = false } = {}) {
+  const suggested = suggestAccountCode();
+  const current = els.accountCode.value.trim();
+  const previousGenerated = els.accountCode.dataset.generated || '';
+  const shouldApply = force || !state.accountCodeTouched || !current || current === previousGenerated;
+  els.accountCode.dataset.generated = suggested;
+  els.accountCode.placeholder = suggested;
+  if (shouldApply) {
+    els.accountCode.value = suggested;
+    state.accountCodeTouched = false;
   }
 }
 
@@ -172,17 +262,68 @@ function renderDashboard() {
     : '<tr><td colspan="3" class="empty">No postings yet.</td></tr>';
 }
 
+function lineDefaultsForType(type) {
+  if (type === 'receipt') {
+    return [
+      { accountFilter: 'cashBank', lockedSide: 'debit', preferredCodes: ['1110', '1120'] },
+      { lockedSide: 'credit' }
+    ];
+  }
+  if (type === 'payment') {
+    return [
+      { accountFilter: 'cashBank', lockedSide: 'credit', preferredCodes: ['1110', '1120'] },
+      { lockedSide: 'debit' }
+    ];
+  }
+  if (type === 'purchase') {
+    return [
+      { accountFilter: 'purchase', lockedSide: 'debit', preferredCodes: ['5100'] },
+      { lockedSide: 'credit', preferredCodes: ['2100', '1110', '1120'] }
+    ];
+  }
+  if (type === 'sales') {
+    return [
+      { accountFilter: 'sales', lockedSide: 'credit', preferredCodes: ['4100'] },
+      { lockedSide: 'debit', preferredCodes: ['1200', '1110', '1120'] }
+    ];
+  }
+  return [{}, {}];
+}
+
+function addedLineDefaultForType(type) {
+  if (type === 'receipt') return { lockedSide: 'credit' };
+  if (type === 'payment') return { lockedSide: 'debit' };
+  if (type === 'purchase') return { lockedSide: 'credit', preferredCodes: ['2100', '1110', '1120'] };
+  if (type === 'sales') return { lockedSide: 'debit', preferredCodes: ['1200', '1110', '1120'] };
+  return {};
+}
+
+function resetVoucherLinesForType() {
+  clearVoucherLines();
+  for (const line of lineDefaultsForType(els.voucherType.value)) {
+    addVoucherLine(line);
+  }
+}
+
 function addVoucherLine(line = {}) {
   const tr = document.createElement('tr');
+  const debitDisabled = line.lockedSide === 'credit' ? 'disabled' : '';
+  const creditDisabled = line.lockedSide === 'debit' ? 'disabled' : '';
   tr.innerHTML = `
     <td><select class="line-account" required></select></td>
     <td><input class="line-description" value="${line.description || ''}" placeholder="Line note"></td>
-    <td><input class="line-debit amount-input" inputmode="decimal" value="${line.debit || ''}" placeholder="0.00"></td>
-    <td><input class="line-credit amount-input" inputmode="decimal" value="${line.credit || ''}" placeholder="0.00"></td>
+    <td><input class="line-debit amount-input" inputmode="decimal" value="${line.debit || ''}" placeholder="0.00" ${debitDisabled}></td>
+    <td><input class="line-credit amount-input" inputmode="decimal" value="${line.credit || ''}" placeholder="0.00" ${creditDisabled}></td>
     <td><button class="icon-button remove-line" type="button" title="Remove line">X</button></td>
   `;
+  tr.dataset.accountFilter = line.accountFilter || 'all';
+  tr.dataset.lockedSide = line.lockedSide || '';
+  tr.dataset.preferredCodes = JSON.stringify(line.preferredCodes || []);
   const accountSelect = tr.querySelector('.line-account');
-  renderAccountOptions(accountSelect);
+  renderAccountOptions(accountSelect, {
+    filter: tr.dataset.accountFilter,
+    preferredCodes: JSON.parse(tr.dataset.preferredCodes)
+  });
   if (line.accountId) accountSelect.value = line.accountId;
   tr.querySelector('.remove-line').addEventListener('click', () => {
     tr.remove();
@@ -201,8 +342,8 @@ function getVoucherLines() {
   return [...els.voucherLines.querySelectorAll('tr')].map((tr) => ({
     accountId: tr.querySelector('.line-account').value,
     description: tr.querySelector('.line-description').value.trim(),
-    debitMinor: moneyToMinor(tr.querySelector('.line-debit').value),
-    creditMinor: moneyToMinor(tr.querySelector('.line-credit').value)
+    debitMinor: tr.querySelector('.line-debit').disabled ? 0 : moneyToMinor(tr.querySelector('.line-debit').value),
+    creditMinor: tr.querySelector('.line-credit').disabled ? 0 : moneyToMinor(tr.querySelector('.line-credit').value)
   }));
 }
 
@@ -219,59 +360,24 @@ function setDefaultDate() {
   els.voucherDate.value = new Date().toISOString().slice(0, 10);
 }
 
-function applyVoucherPattern() {
-  const amount = moneyToMinor(els.quickAmount.value);
-  if (!amount) {
-    showToast('Enter an amount before applying a pattern.');
-    return;
-  }
-  const type = els.voucherType.value;
-  const counter = els.quickCounter.value;
-  const settlement = els.quickSettlement.value;
-  if (!counter || !settlement) {
-    showToast('Select both accounts for the pattern.');
-    return;
-  }
-  clearVoucherLines();
-  if (type === 'receipt') {
-    addVoucherLine({ accountId: settlement, debit: minorToMoney(amount) });
-    addVoucherLine({ accountId: counter, credit: minorToMoney(amount) });
-  } else if (type === 'payment') {
-    addVoucherLine({ accountId: counter, debit: minorToMoney(amount) });
-    addVoucherLine({ accountId: settlement, credit: minorToMoney(amount) });
-  } else if (type === 'purchase') {
-    addVoucherLine({ accountId: counter, debit: minorToMoney(amount) });
-    addVoucherLine({ accountId: settlement, credit: minorToMoney(amount) });
-  } else if (type === 'sales') {
-    addVoucherLine({ accountId: settlement, debit: minorToMoney(amount) });
-    addVoucherLine({ accountId: counter, credit: minorToMoney(amount) });
-  } else {
-    addVoucherLine({ accountId: counter, debit: minorToMoney(amount) });
-    addVoucherLine({ accountId: settlement, credit: minorToMoney(amount) });
-  }
-}
-
 function refreshVoucherSelects() {
-  renderAccountOptions(els.quickCounter, {
-    preferredCodes: ['4100', '5100', '1200', '2100', '5210']
-  });
-  renderAccountOptions(els.quickSettlement, {
-    preferredCodes: ['1110', '1120', '1200', '2100']
-  });
   for (const select of els.voucherLines.querySelectorAll('.line-account')) {
+    const row = select.closest('tr');
     const oldValue = select.value;
-    renderAccountOptions(select);
-    select.value = oldValue;
+    renderAccountOptions(select, {
+      filter: row.dataset.accountFilter || 'all',
+      preferredCodes: JSON.parse(row.dataset.preferredCodes || '[]')
+    });
+    if ([...select.options].some((option) => option.value === oldValue)) {
+      select.value = oldValue;
+    }
   }
 }
 
 function resetVoucherForm() {
   els.voucherForm.reset();
   setDefaultDate();
-  clearVoucherLines();
-  addVoucherLine();
-  addVoucherLine();
-  refreshVoucherSelects();
+  resetVoucherLinesForType();
 }
 
 async function refreshSnapshot() {
@@ -284,6 +390,7 @@ async function refreshSnapshot() {
   renderParentOptions();
   renderTree();
   refreshVoucherSelects();
+  updateSuggestedAccountCode();
 }
 
 function switchView(viewName) {
@@ -307,27 +414,35 @@ function bindEvents() {
   els.navTabs.forEach((tab) => tab.addEventListener('click', () => switchView(tab.dataset.view)));
   els.accountType.addEventListener('change', () => {
     els.accountNormalSide.value = ['asset', 'expense'].includes(els.accountType.value) ? 'debit' : 'credit';
+    renderParentOptions();
+    updateSuggestedAccountCode();
+  });
+  els.accountParent.addEventListener('change', () => updateSuggestedAccountCode());
+  els.accountCode.addEventListener('input', () => {
+    state.accountCodeTouched = els.accountCode.value.trim() !== (els.accountCode.dataset.generated || '');
   });
   els.accountForm.addEventListener('submit', async (event) => {
     event.preventDefault();
     await dbCall('createAccount', {
-      code: document.querySelector('#accountCode').value,
-      name: document.querySelector('#accountName').value,
+      code: els.accountCode.value,
+      name: els.accountName.value,
       type: els.accountType.value,
       parentId: els.accountParent.value || null,
       normalSide: els.accountNormalSide.value,
-      isGroup: document.querySelector('#accountIsGroup').checked
+      isGroup: els.accountIsGroup.checked
     });
     els.accountForm.reset();
+    state.accountCodeTouched = false;
     await refreshSnapshot();
+    updateSuggestedAccountCode({ force: true });
     showToast('Account created.');
   });
 
-  els.addLine.addEventListener('click', () => addVoucherLine());
-  els.applyTemplate.addEventListener('click', applyVoucherPattern);
+  els.addLine.addEventListener('click', () => addVoucherLine(addedLineDefaultForType(els.voucherType.value)));
   els.voucherType.addEventListener('change', () => {
     els.invoiceNo.closest('label').classList.toggle('muted-control', !['purchase', 'sales'].includes(els.voucherType.value));
     els.invoiceDate.closest('label').classList.toggle('muted-control', !['purchase', 'sales'].includes(els.voucherType.value));
+    resetVoucherLinesForType();
   });
 
   els.voucherForm.addEventListener('submit', async (event) => {
@@ -387,10 +502,7 @@ async function boot() {
   setDefaultDate();
   await dbCall('init');
   await refreshSnapshot();
-  if (leafAccounts().length >= 2) {
-    addVoucherLine();
-    addVoucherLine();
-  }
+  if (leafAccounts().length >= 2) resetVoucherLinesForType();
   if ('serviceWorker' in navigator) {
     const swUrl = `${import.meta.env.BASE_URL}sw.js`;
     navigator.serviceWorker

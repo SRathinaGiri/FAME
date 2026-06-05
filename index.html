@@ -111,14 +111,6 @@
               </div>
               <form id="accountForm" class="form-grid">
                 <label>
-                  Code
-                  <input id="accountCode" required autocomplete="off" placeholder="1105">
-                </label>
-                <label>
-                  Name
-                  <input id="accountName" required autocomplete="off" placeholder="Petty Cash">
-                </label>
-                <label>
                   Type
                   <select id="accountType" required>
                     <option value="asset">Asset</option>
@@ -133,6 +125,14 @@
                   <select id="accountParent"></select>
                 </label>
                 <label>
+                  Code
+                  <input id="accountCode" required autocomplete="off" placeholder="Auto generated">
+                </label>
+                <label>
+                  Name
+                  <input id="accountName" required autocomplete="off" placeholder="Petty Cash">
+                </label>
+                <label>
                   Normal Side
                   <select id="accountNormalSide">
                     <option value="debit">Debit</option>
@@ -141,8 +141,11 @@
                 </label>
                 <label class="checkbox-row">
                   <input id="accountIsGroup" type="checkbox">
-                  Group account
+                  Heading account
                 </label>
+                <p class="field-note">
+                  Heading accounts are used only to group child accounts in the hierarchy. Voucher posting uses non-heading accounts.
+                </p>
                 <button type="submit">Create Account</button>
               </form>
             </section>
@@ -187,24 +190,6 @@
                   Narration
                   <input id="narration" autocomplete="off" placeholder="Short description">
                 </label>
-              </div>
-
-              <div class="quick-entry">
-                <div class="quick-row">
-                  <label>
-                    Counter Account
-                    <select id="quickCounter"></select>
-                  </label>
-                  <label>
-                    Cash / Bank / Party
-                    <select id="quickSettlement"></select>
-                  </label>
-                  <label>
-                    Amount
-                    <input id="quickAmount" inputmode="decimal" placeholder="0.00">
-                  </label>
-                  <button id="applyTemplate" type="button" class="secondary">Apply Pattern</button>
-                </div>
               </div>
 
               <div class="table-wrap line-editor">

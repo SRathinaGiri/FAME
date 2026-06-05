@@ -286,6 +286,13 @@ select:focus {
   border-color: var(--accent);
 }
 
+input:disabled,
+select:disabled {
+  background: #eef2f7;
+  color: #98a2b3;
+  cursor: not-allowed;
+}
+
 .checkbox-row {
   display: flex;
   align-items: center;
@@ -295,6 +302,13 @@ select:focus {
 .checkbox-row input {
   width: 18px;
   min-height: 18px;
+}
+
+.field-note {
+  margin: -4px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
 }
 
 .account-tree {
@@ -326,20 +340,6 @@ select:focus {
   display: grid;
   gap: 16px;
   padding: 18px;
-}
-
-.quick-entry {
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  padding: 14px;
-  background: #f8fafc;
-}
-
-.quick-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(120px, 180px) auto;
-  align-items: end;
-  gap: 12px;
 }
 
 .line-editor input,
@@ -451,8 +451,7 @@ select:focus {
 
   .metric-grid,
   .split-grid,
-  .form-grid.compact,
-  .quick-row {
+  .form-grid.compact {
     grid-template-columns: 1fr;
   }
 }
