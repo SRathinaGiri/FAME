@@ -2,6 +2,20 @@ import { dbCall } from './db-client.js';
 import { decryptBackup, encryptBackup } from './crypto.js';
 
 const moneyFormatter = new Intl.NumberFormat('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const timeZoneLocale = {
+  'Asia/Calcutta': 'en-IN',
+  'Asia/Kolkata': 'en-IN',
+  'Asia/Colombo': 'en-LK',
+  'Asia/Dhaka': 'en-BD',
+  'Asia/Karachi': 'en-PK',
+  'Asia/Kathmandu': 'en-NP',
+  'Europe/London': 'en-GB',
+  'Australia/Sydney': 'en-AU',
+  'Pacific/Auckland': 'en-NZ'
+};
+const deviceTimeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+const appLocale = timeZoneLocale[deviceTimeZone] || navigator.languages?.[0] || navigator.language || 'en-IN';
+const dateFormatter = new Intl.DateTimeFormat(appLocale, { day: '2-digit', month: '2-digit', year: 'numeric' });
 
 const state = {
   accountTypes: [],
@@ -16,6 +30,8 @@ const state = {
   vouchers: [],
   trialBalance: [],
   editingVoucherId: null,
+  activeReport: 'daybook',
+  reportExport: null,
   serviceWorkerReloaded: sessionStorage.getItem('fame-sw-reloaded') === '1',
   installPrompt: null
 };
@@ -59,6 +75,27 @@ const els = {
   accountEntryTags: document.querySelector('#accountEntryTags'),
   deleteAccount: document.querySelector('#deleteAccount'),
   clearAccount: document.querySelector('#clearAccount'),
+  reportTabs: document.querySelectorAll('.report-tab'),
+  reportForm: document.querySelector('#reportForm'),
+  reportAccountField: document.querySelector('#reportAccountField'),
+  reportAccount: document.querySelector('#reportAccount'),
+  reportFromField: document.querySelector('#reportFromField'),
+  reportFromDate: document.querySelector('#reportFromDate'),
+  reportToField: document.querySelector('#reportToField'),
+  reportToDate: document.querySelector('#reportToDate'),
+  reportAsOfField: document.querySelector('#reportAsOfField'),
+  reportAsOfDate: document.querySelector('#reportAsOfDate'),
+  reportTitle: document.querySelector('#reportTitle'),
+  reportMeta: document.querySelector('#reportMeta'),
+  reportSummary: document.querySelector('#reportSummary'),
+  reportContent: document.querySelector('#reportContent'),
+  exportReportExcel: document.querySelector('#exportReportExcel'),
+  exportReportPdf: document.querySelector('#exportReportPdf'),
+  reportDrilldown: document.querySelector('#reportDrilldown'),
+  drilldownTitle: document.querySelector('#drilldownTitle'),
+  drilldownMeta: document.querySelector('#drilldownMeta'),
+  drilldownContent: document.querySelector('#drilldownContent'),
+  closeDrilldown: document.querySelector('#closeDrilldown'),
   voucherForm: document.querySelector('#voucherForm'),
   voucherType: document.querySelector('#voucherType'),
   voucherDate: document.querySelector('#voucherDate'),
@@ -92,6 +129,49 @@ const els = {
 
 function minorToMoney(value) {
   return moneyFormatter.format(Number(value || 0) / 100);
+}
+
+function minorToNumber(value) {
+  return Number(value || 0) / 100;
+}
+
+function formatDate(value) {
+  if (!value) return '';
+  const [year, month, day] = String(value).split('-').map(Number);
+  if (!year || !month || !day) return value;
+  return dateFormatter.format(new Date(year, month - 1, day));
+}
+
+function todayIso() {
+  const today = new Date();
+  const local = new Date(today.getTime() - today.getTimezoneOffset() * 60000);
+  return local.toISOString().slice(0, 10);
+}
+
+function yearStartIso() {
+  return `${todayIso().slice(0, 4)}-01-01`;
+}
+
+function escapeHtml(value) {
+  return String(value ?? '')
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;');
+}
+
+function dateRangeLabel(fromDate, toDate) {
+  if (fromDate && toDate) return `${formatDate(fromDate)} to ${formatDate(toDate)}`;
+  if (fromDate) return `From ${formatDate(fromDate)}`;
+  if (toDate) return `Up to ${formatDate(toDate)}`;
+  return 'All dates';
+}
+
+function balanceText(value) {
+  const amount = Number(value || 0);
+  if (amount === 0) return '0.00';
+  return `${minorToMoney(Math.abs(amount))} ${amount > 0 ? 'Dr' : 'Cr'}`;
 }
 
 function moneyToMinor(value) {
@@ -329,7 +409,7 @@ function renderDashboard() {
         .map((voucher) => `
           <tr>
             <td>${voucher.voucherNo}</td>
-            <td>${voucher.voucherDate}</td>
+            <td>${formatDate(voucher.voucherDate)}</td>
             <td class="capitalize">${voucher.type}</td>
             <td>${renderTagChips(state.voucherTags[voucher.id] || [])}</td>
             <td class="amount">${minorToMoney(voucher.amountMinor)}</td>
@@ -348,6 +428,343 @@ function renderDashboard() {
         `)
         .join('')
     : '<tr><td colspan="3" class="empty">No postings yet.</td></tr>';
+}
+
+function reportTable(headers, body) {
+  return `
+    <table>
+      <thead><tr>${headers.map((header) => `<th class="${header.amount ? 'amount' : ''}">${escapeHtml(header.label)}</th>`).join('')}</tr></thead>
+      <tbody>${body}</tbody>
+    </table>
+  `;
+}
+
+function reportKpis(items) {
+  els.reportSummary.innerHTML = items
+    .map((item) => `<div class="report-kpi"><span>${escapeHtml(item.label)}</span><strong>${escapeHtml(item.value)}</strong></div>`)
+    .join('');
+}
+
+function voucherButton(row) {
+  return `<button class="report-link voucher-link" type="button" data-voucher-id="${row.voucherId}">${escapeHtml(row.voucherNo)}</button>`;
+}
+
+function accountButton(row) {
+  return `<button class="report-link account-drill" type="button" data-account-id="${row.accountId}">${escapeHtml(row.accountCode)} - ${escapeHtml(row.accountName)}</button>`;
+}
+
+function bindReportLinks(container) {
+  container.querySelectorAll('.account-drill').forEach((button) => {
+    button.addEventListener('click', () => openAccountDrilldown(button.dataset.accountId));
+  });
+  container.querySelectorAll('.voucher-link').forEach((button) => {
+    button.addEventListener('click', () => {
+      fillVoucherForm(button.dataset.voucherId);
+      switchView('entries');
+    });
+  });
+}
+
+function renderDaybook(data) {
+  els.reportTitle.textContent = 'Daybook';
+  els.reportMeta.textContent = dateRangeLabel(els.reportFromDate.value, els.reportToDate.value);
+  reportKpis([
+    { label: 'Debit', value: minorToMoney(data.totals.debitMinor) },
+    { label: 'Credit', value: minorToMoney(data.totals.creditMinor) }
+  ]);
+  const body = data.rows.length
+    ? data.rows.map((row) => `
+        <tr>
+          <td>${formatDate(row.voucherDate)}</td>
+          <td>${voucherButton(row)}</td>
+          <td class="capitalize">${escapeHtml(row.type)}</td>
+          <td>${escapeHtml(row.accountCode)} - ${escapeHtml(row.accountName)}</td>
+          <td>${escapeHtml(row.description || row.narration || '')}</td>
+          <td class="amount">${row.debitMinor ? minorToMoney(row.debitMinor) : ''}</td>
+          <td class="amount">${row.creditMinor ? minorToMoney(row.creditMinor) : ''}</td>
+        </tr>
+      `).join('')
+    : '<tr><td colspan="7" class="empty">No transactions in this period.</td></tr>';
+  els.reportContent.innerHTML = reportTable(
+    [{ label: 'Date' }, { label: 'Voucher' }, { label: 'Type' }, { label: 'Account' }, { label: 'Details' }, { label: 'Debit', amount: true }, { label: 'Credit', amount: true }],
+    body
+  );
+  state.reportExport = {
+    title: 'Daybook',
+    meta: els.reportMeta.textContent,
+    headers: ['Date', 'Voucher', 'Type', 'Account', 'Details', 'Debit', 'Credit'],
+    rows: data.rows.map((row) => [
+      formatDate(row.voucherDate),
+      row.voucherNo,
+      row.type,
+      `${row.accountCode} - ${row.accountName}`,
+      row.description || row.narration || '',
+      minorToNumber(row.debitMinor),
+      minorToNumber(row.creditMinor)
+    ])
+  };
+  bindReportLinks(els.reportContent);
+}
+
+function ledgerTable(data) {
+  const openingRow = `
+    <tr class="report-group-row">
+      <td></td><td></td><td></td><td>Opening Balance</td><td></td><td></td>
+      <td class="amount">${balanceText(data.openingBalanceMinor)}</td>
+    </tr>
+  `;
+  const rows = data.rows.map((row) => `
+    <tr>
+      <td>${formatDate(row.voucherDate)}</td>
+      <td>${voucherButton(row)}</td>
+      <td class="capitalize">${escapeHtml(row.type)}</td>
+      <td>${escapeHtml(row.description || row.narration || '')}</td>
+      <td class="amount">${row.debitMinor ? minorToMoney(row.debitMinor) : ''}</td>
+      <td class="amount">${row.creditMinor ? minorToMoney(row.creditMinor) : ''}</td>
+      <td class="amount">${balanceText(row.runningBalanceMinor)}</td>
+    </tr>
+  `).join('');
+  const closingRow = `
+    <tr class="report-total-row">
+      <td colspan="6">Closing Balance</td>
+      <td class="amount">${balanceText(data.closingBalanceMinor)}</td>
+    </tr>
+  `;
+  return reportTable(
+    [{ label: 'Date' }, { label: 'Voucher' }, { label: 'Type' }, { label: 'Particulars' }, { label: 'Debit', amount: true }, { label: 'Credit', amount: true }, { label: 'Balance', amount: true }],
+    openingRow + rows + closingRow
+  );
+}
+
+function renderLedger(data) {
+  els.reportTitle.textContent = `Ledger: ${data.account.code} - ${data.account.name}`;
+  els.reportMeta.textContent = dateRangeLabel(els.reportFromDate.value, els.reportToDate.value);
+  reportKpis([
+    { label: 'Opening', value: balanceText(data.openingBalanceMinor) },
+    { label: 'Closing', value: balanceText(data.closingBalanceMinor) }
+  ]);
+  els.reportContent.innerHTML = ledgerTable(data);
+  state.reportExport = {
+    title: els.reportTitle.textContent,
+    meta: els.reportMeta.textContent,
+    headers: ['Date', 'Voucher', 'Type', 'Particulars', 'Debit', 'Credit', 'Balance'],
+    rows: [
+      ['', '', '', 'Opening Balance', '', '', balanceText(data.openingBalanceMinor)],
+      ...data.rows.map((row) => [
+        formatDate(row.voucherDate),
+        row.voucherNo,
+        row.type,
+        row.description || row.narration || '',
+        minorToNumber(row.debitMinor),
+        minorToNumber(row.creditMinor),
+        balanceText(row.runningBalanceMinor)
+      ]),
+      ['', '', '', 'Closing Balance', '', '', balanceText(data.closingBalanceMinor)]
+    ]
+  };
+  bindReportLinks(els.reportContent);
+}
+
+function groupStatementRows(rows) {
+  const heads = new Map();
+  for (const row of rows) {
+    if (!heads.has(row.headId)) heads.set(row.headId, { id: row.headId, code: row.headCode, name: row.headName, rows: [], subheads: new Map() });
+    const head = heads.get(row.headId);
+    head.rows.push(row);
+    if (!head.subheads.has(row.subheadId)) {
+      head.subheads.set(row.subheadId, { id: row.subheadId, code: row.subheadCode, name: row.subheadName, rows: [] });
+    }
+    head.subheads.get(row.subheadId).rows.push(row);
+  }
+  return [...heads.values()];
+}
+
+function statementSection(label, rows) {
+  const exportRows = [];
+  const body = [`<tr class="report-total-row"><td>${escapeHtml(label)}</td><td></td></tr>`];
+  exportRows.push([label, '']);
+  for (const head of groupStatementRows(rows)) {
+    const headTotal = head.rows.reduce((sum, row) => sum + Number(row.amountMinor || 0), 0);
+    body.push(`<tr class="report-group-row"><td>${escapeHtml(head.code)} - ${escapeHtml(head.name)}</td><td class="amount">${minorToMoney(headTotal)}</td></tr>`);
+    exportRows.push([`${head.code} - ${head.name}`, minorToNumber(headTotal)]);
+    for (const subhead of head.subheads.values()) {
+      const subheadTotal = subhead.rows.reduce((sum, row) => sum + Number(row.amountMinor || 0), 0);
+      body.push(`<tr><td class="report-indent-1"><strong>${escapeHtml(subhead.code)} - ${escapeHtml(subhead.name)}</strong></td><td class="amount">${minorToMoney(subheadTotal)}</td></tr>`);
+      exportRows.push([`  ${subhead.code} - ${subhead.name}`, minorToNumber(subheadTotal)]);
+      for (const row of subhead.rows) {
+        body.push(`<tr><td class="report-indent-2">${accountButton(row)}</td><td class="amount">${minorToMoney(row.amountMinor)}</td></tr>`);
+        exportRows.push([`    ${row.accountCode} - ${row.accountName}`, minorToNumber(row.amountMinor)]);
+      }
+    }
+  }
+  return { html: body.join(''), exportRows };
+}
+
+function renderProfitLoss(data) {
+  const income = statementSection('Income', data.rows.filter((row) => row.typeId === 'income'));
+  const expenses = statementSection('Expenses', data.rows.filter((row) => row.typeId === 'expense'));
+  const resultLabel = data.profitMinor >= 0 ? 'Net Profit' : 'Net Loss';
+  els.reportTitle.textContent = 'Profit and Loss Account';
+  els.reportMeta.textContent = dateRangeLabel(els.reportFromDate.value, els.reportToDate.value);
+  reportKpis([
+    { label: 'Income', value: minorToMoney(data.incomeMinor) },
+    { label: 'Expenses', value: minorToMoney(data.expenseMinor) },
+    { label: resultLabel, value: minorToMoney(Math.abs(data.profitMinor)) }
+  ]);
+  els.reportContent.innerHTML = reportTable(
+    [{ label: 'Particulars' }, { label: 'Amount', amount: true }],
+    `${income.html}${expenses.html}<tr class="report-total-row"><td>${resultLabel}</td><td class="amount">${minorToMoney(Math.abs(data.profitMinor))}</td></tr>`
+  );
+  state.reportExport = {
+    title: els.reportTitle.textContent,
+    meta: els.reportMeta.textContent,
+    headers: ['Particulars', 'Amount'],
+    rows: [...income.exportRows, ['Total Income', minorToNumber(data.incomeMinor)], ...expenses.exportRows, ['Total Expenses', minorToNumber(data.expenseMinor)], [resultLabel, minorToNumber(Math.abs(data.profitMinor))]]
+  };
+  bindReportLinks(els.reportContent);
+}
+
+function renderBalanceSheet(data) {
+  const assets = statementSection('Assets', data.rows.filter((row) => row.typeId === 'asset'));
+  const liabilities = statementSection('Liabilities', data.rows.filter((row) => row.typeId === 'liability'));
+  const equity = statementSection('Equity', data.rows.filter((row) => row.typeId === 'equity'));
+  const difference = data.assetsMinor - data.liabilitiesAndEquityMinor;
+  els.reportTitle.textContent = 'Balance Sheet';
+  els.reportMeta.textContent = `As at ${formatDate(els.reportAsOfDate.value)}`;
+  reportKpis([
+    { label: 'Assets', value: minorToMoney(data.assetsMinor) },
+    { label: 'Liabilities and Equity', value: minorToMoney(data.liabilitiesAndEquityMinor) },
+    { label: 'Difference', value: minorToMoney(difference) }
+  ]);
+  els.reportContent.innerHTML = reportTable(
+    [{ label: 'Particulars' }, { label: 'Amount', amount: true }],
+    `${assets.html}
+     <tr class="report-total-row"><td>Total Assets</td><td class="amount">${minorToMoney(data.assetsMinor)}</td></tr>
+     ${liabilities.html}${equity.html}
+     <tr><td class="report-indent-1"><strong>Current Profit / (Loss)</strong></td><td class="amount">${minorToMoney(data.profitMinor)}</td></tr>
+     <tr class="report-total-row"><td>Total Liabilities and Equity</td><td class="amount">${minorToMoney(data.liabilitiesAndEquityMinor)}</td></tr>`
+  );
+  state.reportExport = {
+    title: els.reportTitle.textContent,
+    meta: els.reportMeta.textContent,
+    headers: ['Particulars', 'Amount'],
+    rows: [
+      ...assets.exportRows,
+      ['Total Assets', minorToNumber(data.assetsMinor)],
+      ...liabilities.exportRows,
+      ...equity.exportRows,
+      ['Current Profit / (Loss)', minorToNumber(data.profitMinor)],
+      ['Total Liabilities and Equity', minorToNumber(data.liabilitiesAndEquityMinor)],
+      ['Difference', minorToNumber(difference)]
+    ]
+  };
+  bindReportLinks(els.reportContent);
+}
+
+async function runReport() {
+  els.reportDrilldown.classList.add('hidden');
+  if (state.activeReport === 'daybook') {
+    renderDaybook(await dbCall('reportDaybook', { fromDate: els.reportFromDate.value, toDate: els.reportToDate.value }));
+  } else if (state.activeReport === 'ledger') {
+    renderLedger(await dbCall('reportLedger', {
+      accountId: els.reportAccount.value,
+      fromDate: els.reportFromDate.value,
+      toDate: els.reportToDate.value
+    }));
+  } else if (state.activeReport === 'profitLoss') {
+    renderProfitLoss(await dbCall('reportProfitLoss', { fromDate: els.reportFromDate.value, toDate: els.reportToDate.value }));
+  } else {
+    renderBalanceSheet(await dbCall('reportBalanceSheet', { asOfDate: els.reportAsOfDate.value }));
+  }
+}
+
+function setReportType(type, run = true) {
+  state.activeReport = type;
+  els.reportTabs.forEach((tab) => tab.classList.toggle('active', tab.dataset.report === type));
+  const isLedger = type === 'ledger';
+  const isBalanceSheet = type === 'balanceSheet';
+  els.reportAccountField.classList.toggle('hidden', !isLedger);
+  els.reportFromField.classList.toggle('hidden', isBalanceSheet);
+  els.reportToField.classList.toggle('hidden', isBalanceSheet);
+  els.reportAsOfField.classList.toggle('hidden', !isBalanceSheet);
+  if (run) runReport().catch((error) => showToast(error.message));
+}
+
+async function openAccountDrilldown(accountId) {
+  const isBalanceSheet = state.activeReport === 'balanceSheet';
+  const fromDate = isBalanceSheet ? '' : els.reportFromDate.value;
+  const toDate = isBalanceSheet ? els.reportAsOfDate.value : els.reportToDate.value;
+  const data = await dbCall('reportLedger', { accountId, fromDate, toDate });
+  els.drilldownTitle.textContent = `${data.account.code} - ${data.account.name}`;
+  els.drilldownMeta.textContent = dateRangeLabel(fromDate, toDate);
+  els.drilldownContent.innerHTML = ledgerTable(data);
+  els.reportDrilldown.classList.remove('hidden');
+  bindReportLinks(els.drilldownContent);
+  els.reportDrilldown.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+function safeFilename(value) {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+}
+
+async function exportCurrentReportExcel() {
+  const report = state.reportExport;
+  if (!report) return showToast('Run a report first.');
+  const cell = (value, style = '') => {
+    const numeric = typeof value === 'number';
+    const styleAttribute = style ? ` ss:StyleID="${style}"` : numeric ? ' ss:StyleID="Money"' : '';
+    return `<Cell${styleAttribute}><Data ss:Type="${numeric ? 'Number' : 'String'}">${escapeHtml(value)}</Data></Cell>`;
+  };
+  const headerRow = `<Row>${report.headers.map((header) => cell(header, 'Header')).join('')}</Row>`;
+  const bodyRows = report.rows.map((row) => `<Row>${row.map((value) => cell(value)).join('')}</Row>`).join('');
+  const xml = `<?xml version="1.0" encoding="UTF-8"?>
+<?mso-application progid="Excel.Sheet"?>
+<Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet"
+ xmlns:o="urn:schemas-microsoft-com:office:office"
+ xmlns:x="urn:schemas-microsoft-com:office:excel"
+ xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet">
+ <Styles>
+  <Style ss:ID="Title"><Font ss:Bold="1" ss:Size="16"/></Style>
+  <Style ss:ID="Meta"><Font ss:Color="#667085"/></Style>
+  <Style ss:ID="Header"><Font ss:Bold="1"/><Interior ss:Color="#DCE6F2" ss:Pattern="Solid"/></Style>
+  <Style ss:ID="Money"><NumberFormat ss:Format="#,##0.00"/></Style>
+ </Styles>
+ <Worksheet ss:Name="${escapeHtml(report.title.slice(0, 31))}">
+  <Table>
+   <Row>${cell(report.title, 'Title')}</Row>
+   <Row>${cell(report.meta, 'Meta')}</Row>
+   ${headerRow}
+   ${bodyRows}
+  </Table>
+ </Worksheet>
+</Workbook>`;
+  const blob = new Blob([xml], { type: 'application/vnd.ms-excel;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = `${safeFilename(report.title)}-${todayIso()}.xls`;
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
+async function exportCurrentReportPdf() {
+  const report = state.reportExport;
+  if (!report) return showToast('Run a report first.');
+  const [{ jsPDF }, { default: autoTable }] = await Promise.all([import('jspdf'), import('jspdf-autotable')]);
+  const document = new jsPDF({ orientation: report.headers.length > 5 ? 'landscape' : 'portrait', unit: 'pt', format: 'a4' });
+  document.setFontSize(16);
+  document.text(report.title, 40, 40);
+  document.setFontSize(10);
+  document.setTextColor(102, 112, 133);
+  document.text(report.meta, 40, 58);
+  autoTable(document, {
+    startY: 72,
+    head: [report.headers],
+    body: report.rows.map((row) => row.map((value) => typeof value === 'number' ? moneyFormatter.format(value) : String(value ?? ''))),
+    styles: { fontSize: 8, cellPadding: 4 },
+    headStyles: { fillColor: [31, 58, 95] }
+  });
+  document.save(`${safeFilename(report.title)}-${todayIso()}.pdf`);
 }
 
 function lineDefaultsForType(type) {
@@ -415,7 +832,7 @@ function updateVoucherBalance() {
 function renderVoucherSelect() {
   renderOptions(els.voucherEditSelect, state.vouchers, {
     empty: 'New voucher',
-    label: (voucher) => `${voucher.voucherNo} - ${voucher.voucherDate} - ${voucher.type}`
+    label: (voucher) => `${voucher.voucherNo} - ${formatDate(voucher.voucherDate)} - ${voucher.type}`
   });
 }
 
@@ -423,7 +840,7 @@ function resetVoucherForm() {
   state.editingVoucherId = null;
   els.voucherForm.reset();
   els.voucherEditSelect.value = '';
-  els.voucherDate.value = new Date().toISOString().slice(0, 10);
+  els.voucherDate.value = todayIso();
   renderTagOptions(els.voucherTags);
   resetVoucherLinesForType();
 }
@@ -459,7 +876,7 @@ function renderTagTargets() {
     const rows = state.coaRows.filter((row) => row.level !== 'type');
     renderOptions(els.tagTarget, rows, { label: (row) => `${row.code} - ${row.name} (${levelLabel(row.level)})`, value: (row) => `${row.level}:${row.id}` });
   } else {
-    renderOptions(els.tagTarget, state.vouchers, { label: (voucher) => `${voucher.voucherNo} - ${voucher.voucherDate}`, value: (voucher) => voucher.id });
+    renderOptions(els.tagTarget, state.vouchers, { label: (voucher) => `${voucher.voucherNo} - ${formatDate(voucher.voucherDate)}`, value: (voucher) => voucher.id });
   }
   renderSelectedTargetTags();
 }
@@ -475,6 +892,7 @@ function renderSelectedTargetTags() {
 
 async function refreshSnapshot() {
   const snapshot = await dbCall('snapshot');
+  const selectedReportAccount = els.reportAccount.value;
   Object.assign(state, {
     accountTypes: snapshot.accountTypes || [],
     heads: snapshot.heads || [],
@@ -496,12 +914,17 @@ async function refreshSnapshot() {
   renderTagOptions(els.voucherTags);
   renderVoucherSelect();
   renderTagTargets();
+  renderOptions(els.reportAccount, state.accounts, { label: accountLabel });
+  if (selectedReportAccount && state.accounts.some((account) => account.id === selectedReportAccount)) {
+    els.reportAccount.value = selectedReportAccount;
+  }
 }
 
 function switchView(viewName) {
   els.navTabs.forEach((tab) => tab.classList.toggle('active', tab.dataset.view === viewName));
   els.views.forEach((view) => view.classList.toggle('active', view.id === `${viewName}View`));
   els.viewTitle.textContent = [...els.navTabs].find((tab) => tab.dataset.view === viewName)?.textContent || 'F.A.M.E';
+  if (viewName === 'reports' && !state.reportExport) runReport().catch((error) => showToast(error.message));
 }
 
 function downloadJson(filename, data) {
@@ -541,6 +964,14 @@ async function deleteCoaForm(level) {
 
 function bindEvents() {
   els.navTabs.forEach((tab) => tab.addEventListener('click', () => switchView(tab.dataset.view)));
+  els.reportTabs.forEach((tab) => tab.addEventListener('click', () => setReportType(tab.dataset.report)));
+  els.reportForm.addEventListener('submit', (event) => {
+    event.preventDefault();
+    runReport().catch((error) => showToast(error.message));
+  });
+  els.exportReportExcel.addEventListener('click', () => exportCurrentReportExcel().catch((error) => showToast(error.message)));
+  els.exportReportPdf.addEventListener('click', () => exportCurrentReportPdf().catch((error) => showToast(error.message)));
+  els.closeDrilldown.addEventListener('click', () => els.reportDrilldown.classList.add('hidden'));
   els.headType.addEventListener('change', () => suggestCode('head', coaForms.head()).catch(() => undefined));
   els.subheadType.addEventListener('change', () => {
     renderHeadOptions(els.subheadHead, els.subheadType.value);
@@ -629,7 +1060,7 @@ function bindEvents() {
 
   els.exportForm.addEventListener('submit', async (event) => {
     event.preventDefault();
-    downloadJson(`fame-backup-${new Date().toISOString().slice(0, 10)}.json`, await encryptBackup(await dbCall('exportData'), els.exportPassword.value));
+    downloadJson(`fame-backup-${todayIso()}.json`, await encryptBackup(await dbCall('exportData'), els.exportPassword.value));
     els.exportForm.reset();
   });
   els.importForm.addEventListener('submit', async (event) => {
@@ -683,8 +1114,14 @@ async function prepareServiceWorker() {
 }
 
 async function boot() {
+  document.documentElement.lang = appLocale;
+  document.querySelectorAll('input[type="date"]').forEach((input) => input.setAttribute('lang', appLocale));
   bindEvents();
-  els.voucherDate.value = new Date().toISOString().slice(0, 10);
+  els.voucherDate.value = todayIso();
+  els.reportFromDate.value = yearStartIso();
+  els.reportToDate.value = todayIso();
+  els.reportAsOfDate.value = todayIso();
+  setReportType('daybook', false);
   if (!(await prepareServiceWorker())) {
     return;
   }

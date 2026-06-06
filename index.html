@@ -24,6 +24,7 @@
           <button class="nav-tab active" data-view="dashboard">Dashboard</button>
           <button class="nav-tab" data-view="coa">Chart of Accounts</button>
           <button class="nav-tab" data-view="entries">Entries</button>
+          <button class="nav-tab" data-view="reports">Reports</button>
           <button class="nav-tab" data-view="tags">Tags</button>
           <button class="nav-tab" data-view="backup">Backup</button>
         </nav>
@@ -276,6 +277,59 @@
                 <button type="submit">Post Voucher</button>
               </div>
             </form>
+          </section>
+        </section>
+
+        <section class="view" id="reportsView">
+          <section class="panel report-panel">
+            <div class="report-tabs" role="tablist" aria-label="Reports">
+              <button class="report-tab active" type="button" data-report="daybook">Daybook</button>
+              <button class="report-tab" type="button" data-report="ledger">Ledger</button>
+              <button class="report-tab" type="button" data-report="profitLoss">Profit and Loss</button>
+              <button class="report-tab" type="button" data-report="balanceSheet">Balance Sheet</button>
+            </div>
+            <form id="reportForm" class="report-toolbar">
+              <label id="reportAccountField" class="hidden">
+                Account
+                <select id="reportAccount"></select>
+              </label>
+              <label id="reportFromField">
+                From
+                <input id="reportFromDate" type="date">
+              </label>
+              <label id="reportToField">
+                To
+                <input id="reportToDate" type="date">
+              </label>
+              <label id="reportAsOfField" class="hidden">
+                As at
+                <input id="reportAsOfDate" type="date">
+              </label>
+              <div class="report-actions">
+                <button type="submit">Run</button>
+                <button id="exportReportExcel" type="button" class="secondary">Excel</button>
+                <button id="exportReportPdf" type="button" class="secondary">PDF</button>
+              </div>
+            </form>
+            <div class="report-heading">
+              <div>
+                <h2 id="reportTitle">Daybook</h2>
+                <p id="reportMeta" class="muted-text"></p>
+              </div>
+              <div id="reportSummary" class="report-summary"></div>
+            </div>
+            <div id="reportContent" class="report-content"></div>
+          </section>
+
+          <section id="reportDrilldown" class="panel drilldown-panel hidden">
+            <div class="panel-heading">
+              <div>
+                <h2 id="drilldownTitle">Account Transactions</h2>
+                <p id="drilldownMeta" class="muted-text"></p>
+              </div>
+              <button id="closeDrilldown" type="button" class="secondary">Close</button>
+            </div>
+            <div id="drilldownContent" class="report-content"></div>
           </section>
         </section>
 

@@ -639,6 +639,157 @@ function getTrialBalance() {
   `);
 }
 
+function reportDaybook({ fromDate = '', toDate = '' } = {}) {
+  const rows = all(`
+    SELECT v.id AS voucherId, v.voucher_no AS voucherNo, v.type,
+           v.voucher_date AS voucherDate, v.reference_no AS referenceNo,
+           v.invoice_no AS invoiceNo, v.narration,
+           vl.sort_order AS sortOrder, vl.description,
+           a.id AS accountId, a.code AS accountCode, a.name AS accountName,
+           vl.debit_minor AS debitMinor, vl.credit_minor AS creditMinor
+    FROM vouchers v
+    JOIN voucher_lines vl ON vl.voucher_id = v.id
+    JOIN accounts a ON a.id = vl.account_id
+    WHERE (? = '' OR v.voucher_date >= ?)
+      AND (? = '' OR v.voucher_date <= ?)
+    ORDER BY v.voucher_date, v.voucher_no, vl.sort_order
+  `, [fromDate, fromDate, toDate, toDate]);
+  const totals = rows.reduce(
+    (sum, row) => ({
+      debitMinor: sum.debitMinor + Number(row.debitMinor || 0),
+      creditMinor: sum.creditMinor + Number(row.creditMinor || 0)
+    }),
+    { debitMinor: 0, creditMinor: 0 }
+  );
+  return { rows, totals };
+}
+
+function reportLedger({ accountId, fromDate = '', toDate = '' } = {}) {
+  if (!accountId) throw new Error('Select an account for the ledger.');
+  const account = one(`
+    SELECT a.id, a.code, a.name, t.normal_side AS normalSide
+    FROM accounts a
+    JOIN subhead_accounts s ON s.id = a.subhead_id
+    JOIN head_accounts h ON h.id = s.head_id
+    JOIN account_types t ON t.id = h.type_id
+    WHERE a.id = ?
+  `, [accountId]);
+  if (!account) throw new Error('The selected account was not found.');
+  const opening = fromDate
+    ? one(`
+        SELECT COALESCE(SUM(vl.debit_minor - vl.credit_minor), 0) AS balanceMinor
+        FROM voucher_lines vl
+        JOIN vouchers v ON v.id = vl.voucher_id
+        WHERE vl.account_id = ? AND v.voucher_date < ?
+      `, [accountId, fromDate])
+    : { balanceMinor: 0 };
+  const rows = all(`
+    SELECT v.id AS voucherId, v.voucher_no AS voucherNo, v.type,
+           v.voucher_date AS voucherDate, v.reference_no AS referenceNo,
+           v.invoice_no AS invoiceNo, v.narration, vl.description,
+           vl.debit_minor AS debitMinor, vl.credit_minor AS creditMinor
+    FROM voucher_lines vl
+    JOIN vouchers v ON v.id = vl.voucher_id
+    WHERE vl.account_id = ?
+      AND (? = '' OR v.voucher_date >= ?)
+      AND (? = '' OR v.voucher_date <= ?)
+    ORDER BY v.voucher_date, v.voucher_no, vl.sort_order
+  `, [accountId, fromDate, fromDate, toDate, toDate]);
+  let runningBalanceMinor = Number(opening.balanceMinor || 0);
+  const runningRows = rows.map((row) => {
+    runningBalanceMinor += Number(row.debitMinor || 0) - Number(row.creditMinor || 0);
+    return { ...row, runningBalanceMinor };
+  });
+  return {
+    account,
+    openingBalanceMinor: Number(opening.balanceMinor || 0),
+    closingBalanceMinor: runningBalanceMinor,
+    rows: runningRows
+  };
+}
+
+function reportProfitLoss({ fromDate = '', toDate = '' } = {}) {
+  const rows = all(`
+    SELECT a.id AS accountId, a.code AS accountCode, a.name AS accountName,
+           s.id AS subheadId, s.code AS subheadCode, s.name AS subheadName,
+           h.id AS headId, h.code AS headCode, h.name AS headName,
+           h.type_id AS typeId,
+           COALESCE(SUM(vl.debit_minor), 0) AS debitMinor,
+           COALESCE(SUM(vl.credit_minor), 0) AS creditMinor
+    FROM accounts a
+    JOIN subhead_accounts s ON s.id = a.subhead_id
+    JOIN head_accounts h ON h.id = s.head_id
+    JOIN voucher_lines vl ON vl.account_id = a.id
+    JOIN vouchers v ON v.id = vl.voucher_id
+    WHERE h.type_id IN ('income', 'expense')
+      AND (? = '' OR v.voucher_date >= ?)
+      AND (? = '' OR v.voucher_date <= ?)
+    GROUP BY a.id
+    ORDER BY h.type_id, h.code, s.code, a.code
+  `, [fromDate, fromDate, toDate, toDate]).map((row) => ({
+    ...row,
+    amountMinor:
+      row.typeId === 'income'
+        ? Number(row.creditMinor || 0) - Number(row.debitMinor || 0)
+        : Number(row.debitMinor || 0) - Number(row.creditMinor || 0)
+  }));
+  const incomeMinor = rows.filter((row) => row.typeId === 'income').reduce((sum, row) => sum + row.amountMinor, 0);
+  const expenseMinor = rows.filter((row) => row.typeId === 'expense').reduce((sum, row) => sum + row.amountMinor, 0);
+  return { rows, incomeMinor, expenseMinor, profitMinor: incomeMinor - expenseMinor };
+}
+
+function reportBalanceSheet({ asOfDate = '' } = {}) {
+  const rows = all(`
+    SELECT a.id AS accountId, a.code AS accountCode, a.name AS accountName,
+           s.id AS subheadId, s.code AS subheadCode, s.name AS subheadName,
+           h.id AS headId, h.code AS headCode, h.name AS headName,
+           h.type_id AS typeId,
+           COALESCE(SUM(vl.debit_minor), 0) AS debitMinor,
+           COALESCE(SUM(vl.credit_minor), 0) AS creditMinor
+    FROM accounts a
+    JOIN subhead_accounts s ON s.id = a.subhead_id
+    JOIN head_accounts h ON h.id = s.head_id
+    LEFT JOIN voucher_lines vl ON vl.account_id = a.id
+      AND EXISTS (
+        SELECT 1 FROM vouchers v
+        WHERE v.id = vl.voucher_id AND (? = '' OR v.voucher_date <= ?)
+      )
+    WHERE h.type_id IN ('asset', 'liability', 'equity')
+    GROUP BY a.id
+    ORDER BY h.type_id, h.code, s.code, a.code
+  `, [asOfDate, asOfDate]).map((row) => ({
+    ...row,
+    amountMinor:
+      row.typeId === 'asset'
+        ? Number(row.debitMinor || 0) - Number(row.creditMinor || 0)
+        : Number(row.creditMinor || 0) - Number(row.debitMinor || 0)
+  })).filter((row) => row.amountMinor !== 0);
+  const profit = one(`
+    SELECT
+      COALESCE(SUM(CASE WHEN h.type_id = 'income' THEN vl.credit_minor - vl.debit_minor ELSE 0 END), 0)
+      - COALESCE(SUM(CASE WHEN h.type_id = 'expense' THEN vl.debit_minor - vl.credit_minor ELSE 0 END), 0)
+      AS profitMinor
+    FROM voucher_lines vl
+    JOIN vouchers v ON v.id = vl.voucher_id
+    JOIN accounts a ON a.id = vl.account_id
+    JOIN subhead_accounts s ON s.id = a.subhead_id
+    JOIN head_accounts h ON h.id = s.head_id
+    WHERE (? = '' OR v.voucher_date <= ?)
+  `, [asOfDate, asOfDate]);
+  const assetsMinor = rows.filter((row) => row.typeId === 'asset').reduce((sum, row) => sum + row.amountMinor, 0);
+  const liabilitiesMinor = rows.filter((row) => row.typeId === 'liability').reduce((sum, row) => sum + row.amountMinor, 0);
+  const equityMinor = rows.filter((row) => row.typeId === 'equity').reduce((sum, row) => sum + row.amountMinor, 0);
+  const profitMinor = Number(profit?.profitMinor || 0);
+  return {
+    rows,
+    assetsMinor,
+    liabilitiesMinor,
+    equityMinor,
+    profitMinor,
+    liabilitiesAndEquityMinor: liabilitiesMinor + equityMinor + profitMinor
+  };
+}
+
 function getSnapshot() {
   const postingAccounts = listPostingAccounts();
   return {
@@ -708,6 +859,10 @@ const handlers = {
   setVoucherTags,
   saveVoucher,
   deleteVoucher,
+  reportDaybook,
+  reportLedger,
+  reportProfitLoss,
+  reportBalanceSheet,
   exportData,
   importData
 };
