@@ -23,6 +23,7 @@
         <nav class="nav-tabs" aria-label="Main navigation">
           <button class="nav-tab active" data-view="dashboard">Dashboard</button>
           <button class="nav-tab" data-view="coa">Chart of Accounts</button>
+          <button class="nav-tab" data-view="products">Products / Services</button>
           <button class="nav-tab" data-view="entries">Entries</button>
           <button class="nav-tab" data-view="reports">Reports</button>
           <button class="nav-tab" data-view="tags">Tags</button>
@@ -206,6 +207,7 @@
                   <label>Government Registration 1<input id="accountRegistration1" autocomplete="off"></label>
                   <label>Government Registration 2<input id="accountRegistration2" autocomplete="off"></label>
                   <label>Government Registration 3<input id="accountRegistration3" autocomplete="off"></label>
+                  <label>State<input id="accountState" autocomplete="address-level1"></label>
                 </div>
                 <p class="field-note">
                   Codes use 6 digits: type, head, sub-head, account. Only Accounts are available in voucher entry.
@@ -214,6 +216,39 @@
                   <button type="submit">Save Account</button>
                   <button id="deleteAccount" type="button" class="secondary">Delete</button>
                   <button id="clearAccount" type="button" class="secondary">Clear</button>
+                </div>
+              </form>
+            </section>
+          </div>
+        </section>
+
+        <section class="view" id="productsView">
+          <div class="split-grid">
+            <section class="panel">
+              <div class="panel-heading"><h2>Product / Service List</h2></div>
+              <div id="productList" class="tag-list"></div>
+            </section>
+            <section class="panel">
+              <div class="panel-heading"><h2>Product / Service Master</h2></div>
+              <form id="productForm" class="form-grid">
+                <input id="productId" type="hidden">
+                <label>Name<input id="productName" required autocomplete="off"></label>
+                <label>
+                  Type
+                  <select id="productKind">
+                    <option value="product">Product</option>
+                    <option value="service">Service</option>
+                  </select>
+                </label>
+                <label class="product-gst-field">HSN / SAC Code<input id="productHsnSac" autocomplete="off"></label>
+                <label class="product-gst-field">GST Rate %<input id="productGstRate" type="number" min="0" step="0.01" value="0"></label>
+                <label class="checkbox-row product-gst-field"><input id="productItcAvailable" type="checkbox" checked> ITC available on purchase</label>
+                <label>Purchase Account<select id="productPurchaseAccount" required></select></label>
+                <label>Sales Account<select id="productSalesAccount" required></select></label>
+                <div class="action-row full-width">
+                  <button type="submit">Save Product / Service</button>
+                  <button id="deleteProduct" type="button" class="secondary">Delete</button>
+                  <button id="clearProduct" type="button" class="secondary">Clear</button>
                 </div>
               </form>
             </section>
@@ -266,9 +301,13 @@
                   Edit Voucher
                   <select id="voucherEditSelect"></select>
                 </label>
+                <label id="voucherPartyField" class="hidden">
+                  <span id="voucherPartyLabel">Customer / Supplier</span>
+                  <select id="voucherParty"></select>
+                </label>
               </div>
 
-              <div class="table-wrap line-editor">
+              <div id="voucherLineEditor" class="table-wrap line-editor">
                 <table>
                   <thead>
                     <tr>
@@ -282,8 +321,38 @@
                   <tbody id="voucherLines"></tbody>
                 </table>
               </div>
+              <div id="invoiceItemEditor" class="table-wrap line-editor hidden">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Product / Service</th>
+                      <th class="amount">Quantity</th>
+                      <th class="amount">Taxable Amount</th>
+                      <th class="amount invoice-gst-column invoice-cgst-column">CGST</th>
+                      <th class="amount invoice-gst-column invoice-sgst-column">SGST</th>
+                      <th class="amount invoice-gst-column invoice-igst-column">IGST</th>
+                      <th class="amount">Total</th>
+                      <th></th>
+                    </tr>
+                  </thead>
+                  <tbody id="invoiceItems"></tbody>
+                  <tfoot>
+                    <tr class="report-total-row">
+                      <td>Total</td>
+                      <td></td>
+                      <td id="invoiceTaxableTotal" class="amount">0.00</td>
+                      <td id="invoiceCgstTotal" class="amount invoice-gst-column invoice-cgst-column">0.00</td>
+                      <td id="invoiceSgstTotal" class="amount invoice-gst-column invoice-sgst-column">0.00</td>
+                      <td id="invoiceIgstTotal" class="amount invoice-gst-column invoice-igst-column">0.00</td>
+                      <td id="invoiceGrandTotal" class="amount">0.00</td>
+                      <td></td>
+                    </tr>
+                  </tfoot>
+                </table>
+              </div>
               <div class="action-row">
                 <button id="addLine" type="button" class="secondary">Add Line</button>
+                <button id="addInvoiceItem" type="button" class="secondary hidden">Add Product / Service</button>
                 <button id="deleteVoucher" type="button" class="secondary">Delete Voucher</button>
                 <button id="clearVoucher" type="button" class="secondary">New Voucher</button>
                 <button type="submit">Post Voucher</button>
@@ -419,6 +488,11 @@
               <label>Government Registration 2<input id="companyRegistration2" autocomplete="off"></label>
               <label>Government Registration 3<input id="companyRegistration3" autocomplete="off"></label>
               <label>Financial Year Start Date<input id="companyFinancialYearStart" type="date" required></label>
+              <label class="checkbox-row">
+                <input id="companyGstEnabled" type="checkbox">
+                GST Enabled
+              </label>
+              <p id="gstLockNote" class="field-note hidden">GST setting is locked because transactions exist.</p>
               <p class="field-note full-width">The month and day are reused each year to set the default report From date.</p>
               <div class="action-row full-width"><button type="submit">Save Configuration</button></div>
             </form>

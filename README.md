@@ -10,6 +10,8 @@ F.A.M.E is a local-first accounting PWA built as a self-contained browser app. T
 - Hierarchical chart of accounts
 - Receipt, payment, purchase invoice, sales invoice, and journal voucher entry
 - Tags for accounts, heading accounts, and vouchers
+- Product and service masters with HSN/SAC, GST rates, and ITC eligibility
+- GST-aware purchase and sales invoices with intra-state CGST/SGST and inter-state IGST
 - Trial balance and recent voucher dashboard
 - Password-encrypted JSON backup export/import
 

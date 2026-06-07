@@ -22,6 +22,8 @@ const state = {
   heads: [],
   subheads: [],
   accounts: [],
+  products: [],
+  hasTransactions: false,
   coaRows: [],
   tags: [],
   coaTags: { head: {}, subhead: {}, account: {} },
@@ -82,6 +84,7 @@ const els = {
   accountRegistration1: document.querySelector('#accountRegistration1'),
   accountRegistration2: document.querySelector('#accountRegistration2'),
   accountRegistration3: document.querySelector('#accountRegistration3'),
+  accountState: document.querySelector('#accountState'),
   deleteAccount: document.querySelector('#deleteAccount'),
   clearAccount: document.querySelector('#clearAccount'),
   reportTabs: document.querySelectorAll('.report-tab'),
@@ -109,6 +112,18 @@ const els = {
   drilldownMeta: document.querySelector('#drilldownMeta'),
   drilldownContent: document.querySelector('#drilldownContent'),
   closeDrilldown: document.querySelector('#closeDrilldown'),
+  productList: document.querySelector('#productList'),
+  productForm: document.querySelector('#productForm'),
+  productId: document.querySelector('#productId'),
+  productName: document.querySelector('#productName'),
+  productKind: document.querySelector('#productKind'),
+  productHsnSac: document.querySelector('#productHsnSac'),
+  productGstRate: document.querySelector('#productGstRate'),
+  productItcAvailable: document.querySelector('#productItcAvailable'),
+  productPurchaseAccount: document.querySelector('#productPurchaseAccount'),
+  productSalesAccount: document.querySelector('#productSalesAccount'),
+  deleteProduct: document.querySelector('#deleteProduct'),
+  clearProduct: document.querySelector('#clearProduct'),
   voucherForm: document.querySelector('#voucherForm'),
   voucherType: document.querySelector('#voucherType'),
   voucherDate: document.querySelector('#voucherDate'),
@@ -118,7 +133,19 @@ const els = {
   narration: document.querySelector('#narration'),
   voucherTags: document.querySelector('#voucherTags'),
   voucherEditSelect: document.querySelector('#voucherEditSelect'),
+  voucherPartyField: document.querySelector('#voucherPartyField'),
+  voucherPartyLabel: document.querySelector('#voucherPartyLabel'),
+  voucherParty: document.querySelector('#voucherParty'),
+  voucherLineEditor: document.querySelector('#voucherLineEditor'),
   voucherLines: document.querySelector('#voucherLines'),
+  invoiceItemEditor: document.querySelector('#invoiceItemEditor'),
+  invoiceItems: document.querySelector('#invoiceItems'),
+  addInvoiceItem: document.querySelector('#addInvoiceItem'),
+  invoiceTaxableTotal: document.querySelector('#invoiceTaxableTotal'),
+  invoiceCgstTotal: document.querySelector('#invoiceCgstTotal'),
+  invoiceSgstTotal: document.querySelector('#invoiceSgstTotal'),
+  invoiceIgstTotal: document.querySelector('#invoiceIgstTotal'),
+  invoiceGrandTotal: document.querySelector('#invoiceGrandTotal'),
   voucherBalance: document.querySelector('#voucherBalance'),
   addLine: document.querySelector('#addLine'),
   deleteVoucher: document.querySelector('#deleteVoucher'),
@@ -147,6 +174,8 @@ const els = {
   companyRegistration2: document.querySelector('#companyRegistration2'),
   companyRegistration3: document.querySelector('#companyRegistration3'),
   companyFinancialYearStart: document.querySelector('#companyFinancialYearStart'),
+  companyGstEnabled: document.querySelector('#companyGstEnabled'),
+  gstLockNote: document.querySelector('#gstLockNote'),
   installButton: document.querySelector('#installButton'),
   toast: document.querySelector('#toast')
 };
@@ -328,6 +357,7 @@ const coaForms = {
     registration1: els.accountRegistration1,
     registration2: els.accountRegistration2,
     registration3: els.accountRegistration3,
+    state: els.accountState,
     deleteButton: els.deleteAccount
   })
 };
@@ -395,6 +425,7 @@ function fillCoaForm(row) {
     controls.registration1.value = row.registration1 || '';
     controls.registration2.value = row.registration2 || '';
     controls.registration3.value = row.registration3 || '';
+    controls.state.value = row.state || '';
     renderAccountPersonalFields();
   }
   renderTagOptions(controls.tags, currentCoaTagIds(row.level, row.id));
@@ -421,6 +452,57 @@ function renderCompanyMaster() {
   els.companyRegistration2.value = company.registration2 || '';
   els.companyRegistration3.value = company.registration3 || '';
   els.companyFinancialYearStart.value = company.financialYearStart || `${todayIso().slice(0, 4)}-04-01`;
+  els.companyGstEnabled.checked = Boolean(company.gstEnabled);
+  els.companyGstEnabled.disabled = state.hasTransactions;
+  els.gstLockNote.classList.toggle('hidden', !state.hasTransactions);
+}
+
+function clearProductForm() {
+  els.productForm.reset();
+  els.productId.value = '';
+  els.productGstRate.value = '0';
+  els.productItcAvailable.checked = true;
+  els.deleteProduct.disabled = true;
+}
+
+function renderProductMaster() {
+  const purchaseAccounts = state.accounts.filter((account) => account.typeId === 'expense' && !account.isSystem);
+  const salesAccounts = state.accounts.filter((account) => account.typeId === 'income' && !account.isSystem);
+  const selectedPurchase = els.productPurchaseAccount.value;
+  const selectedSales = els.productSalesAccount.value;
+  document.querySelectorAll('.product-gst-field').forEach((element) => {
+    element.classList.toggle('hidden', !state.company.gstEnabled);
+  });
+  renderOptions(els.productPurchaseAccount, purchaseAccounts, { label: accountLabel });
+  renderOptions(els.productSalesAccount, salesAccounts, { label: accountLabel });
+  if (purchaseAccounts.some((account) => account.id === selectedPurchase)) els.productPurchaseAccount.value = selectedPurchase;
+  if (salesAccounts.some((account) => account.id === selectedSales)) els.productSalesAccount.value = selectedSales;
+  els.productList.innerHTML = state.products.length
+    ? state.products.map((product) => `
+        <button class="product-row" type="button" data-product-id="${product.id}">
+          <strong>${escapeHtml(product.name)}</strong>
+          <span>${escapeHtml(product.kind)}${state.company.gstEnabled
+            ? ` | ${escapeHtml(product.hsnSacCode || 'No HSN/SAC')} | GST ${product.gstRate}%`
+            : ''}</span>
+        </button>
+      `).join('')
+    : '<div class="empty-list">No products or services created yet.</div>';
+  els.productList.querySelectorAll('.product-row').forEach((button) => {
+    button.addEventListener('click', () => {
+      const product = state.products.find((item) => item.id === button.dataset.productId);
+      if (!product) return;
+      els.productId.value = product.id;
+      els.productName.value = product.name;
+      els.productKind.value = product.kind;
+      els.productHsnSac.value = product.hsnSacCode || '';
+      els.productGstRate.value = product.gstRate;
+      els.productItcAvailable.checked = Boolean(product.itcAvailable);
+      els.productPurchaseAccount.value = product.purchaseAccountId;
+      els.productSalesAccount.value = product.salesAccountId;
+      els.deleteProduct.disabled = false;
+    });
+  });
+  if (!els.productId.value) els.deleteProduct.disabled = true;
 }
 
 function renderTree() {
@@ -922,6 +1004,136 @@ function lineDefaultsForType(type) {
   return [{}, {}];
 }
 
+function isInvoiceType(type = els.voucherType.value) {
+  return type === 'purchase' || type === 'sales';
+}
+
+function renderVoucherMode() {
+  const invoice = isInvoiceType();
+  const gstEnabled = Boolean(state.company.gstEnabled);
+  els.voucherLineEditor.classList.toggle('hidden', invoice);
+  els.invoiceItemEditor.classList.toggle('hidden', !invoice);
+  els.voucherPartyField.classList.toggle('hidden', !invoice);
+  els.addLine.classList.toggle('hidden', invoice);
+  els.addInvoiceItem.classList.toggle('hidden', !invoice);
+  els.voucherPartyLabel.textContent = els.voucherType.value === 'purchase' ? 'Supplier' : 'Customer';
+  document.querySelectorAll('.invoice-gst-column').forEach((element) => element.classList.toggle('hidden', !gstEnabled));
+  if (invoice) {
+    const selectedParty = els.voucherParty.value;
+    const partyHeadCode = els.voucherType.value === 'purchase' ? '201000' : '102000';
+    const parties = state.accounts.filter((account) =>
+      account.isPersonal && !account.isSystem && account.headCode === partyHeadCode
+    );
+    renderOptions(els.voucherParty, parties, {
+      label: (account) => `${accountLabel(account)}${account.state ? ` | ${account.state}` : ''}`,
+      empty: `Select ${els.voucherType.value === 'purchase' ? 'supplier' : 'customer'}`
+    });
+    if (parties.some((account) => account.id === selectedParty)) els.voucherParty.value = selectedParty;
+  }
+}
+
+function invoiceIsInterstate() {
+  if (!state.company.gstEnabled) return false;
+  const party = state.accounts.find((account) => account.id === els.voucherParty.value);
+  const companyState = String(state.company.state || '').trim().toLowerCase();
+  const partyState = String(party?.state || '').trim().toLowerCase();
+  return Boolean(companyState && partyState && companyState !== partyState);
+}
+
+function renderApplicableTaxColumns() {
+  const gstEnabled = Boolean(state.company.gstEnabled);
+  const party = state.accounts.find((account) => account.id === els.voucherParty.value);
+  const statesKnown = Boolean(String(state.company.state || '').trim() && String(party?.state || '').trim());
+  const interstate = statesKnown && invoiceIsInterstate();
+  document.querySelectorAll('.invoice-cgst-column, .invoice-sgst-column').forEach((element) => {
+    element.classList.toggle('hidden', !gstEnabled || (statesKnown && interstate));
+  });
+  document.querySelectorAll('.invoice-igst-column').forEach((element) => {
+    element.classList.toggle('hidden', !gstEnabled || (statesKnown && !interstate));
+  });
+}
+
+function calculateInvoiceItemRow(tr) {
+  const product = state.products.find((item) => item.id === tr.querySelector('.item-product').value);
+  const taxableMinor = moneyToMinor(tr.querySelector('.item-taxable').value);
+  const gstRate = tr.dataset.gstRate === '' ? Number(product?.gstRate || 0) : Number(tr.dataset.gstRate || 0);
+  const totalTaxMinor = state.company.gstEnabled ? Math.round(taxableMinor * gstRate / 100) : 0;
+  const interstate = invoiceIsInterstate();
+  const igstMinor = interstate ? totalTaxMinor : 0;
+  const cgstMinor = interstate ? 0 : Math.floor(totalTaxMinor / 2);
+  const sgstMinor = interstate ? 0 : totalTaxMinor - cgstMinor;
+  tr.dataset.cgstMinor = String(cgstMinor);
+  tr.dataset.sgstMinor = String(sgstMinor);
+  tr.dataset.igstMinor = String(igstMinor);
+  tr.querySelector('.item-cgst').textContent = minorToMoney(cgstMinor);
+  tr.querySelector('.item-sgst').textContent = minorToMoney(sgstMinor);
+  tr.querySelector('.item-igst').textContent = minorToMoney(igstMinor);
+  tr.querySelector('.item-total').textContent = minorToMoney(taxableMinor + totalTaxMinor);
+}
+
+function addInvoiceItem(item = {}) {
+  const tr = document.createElement('tr');
+  tr.dataset.gstRate = item.gstRate == null ? '' : String(item.gstRate);
+  tr.innerHTML = `
+    <td><select class="item-product" required></select></td>
+    <td><input class="item-quantity amount-input" type="number" min="0.0001" step="0.0001" value="${item.quantity || 1}"></td>
+    <td><input class="item-taxable amount-input" inputmode="decimal" value="${item.taxableMinor ? minorToMoney(item.taxableMinor) : ''}" placeholder="0.00"></td>
+    <td class="item-cgst amount invoice-gst-column invoice-cgst-column">0.00</td>
+    <td class="item-sgst amount invoice-gst-column invoice-sgst-column">0.00</td>
+    <td class="item-igst amount invoice-gst-column invoice-igst-column">0.00</td>
+    <td class="item-total amount">0.00</td>
+    <td><button class="icon-button remove-item" type="button" title="Remove item">X</button></td>
+  `;
+  renderOptions(tr.querySelector('.item-product'), state.products, {
+    label: (product) => `${product.name} | ${product.kind}${state.company.gstEnabled ? ` | GST ${product.gstRate}%` : ''}`,
+    empty: 'Select product / service'
+  });
+  if (item.productId) tr.querySelector('.item-product').value = item.productId;
+  tr.querySelector('.item-product').addEventListener('change', () => {
+    tr.dataset.gstRate = '';
+  });
+  tr.querySelector('.remove-item').addEventListener('click', () => {
+    tr.remove();
+    updateInvoiceTotals();
+  });
+  tr.querySelectorAll('input, select').forEach((control) => {
+    control.addEventListener('input', updateInvoiceTotals);
+    control.addEventListener('change', updateInvoiceTotals);
+  });
+  els.invoiceItems.append(tr);
+  renderVoucherMode();
+  updateInvoiceTotals();
+}
+
+function getInvoiceItems() {
+  return [...els.invoiceItems.querySelectorAll('tr')].map((tr) => ({
+    productId: tr.querySelector('.item-product').value,
+    quantity: Number(tr.querySelector('.item-quantity').value || 0),
+    taxableMinor: moneyToMinor(tr.querySelector('.item-taxable').value),
+    cgstMinor: Number(tr.dataset.cgstMinor || 0),
+    sgstMinor: Number(tr.dataset.sgstMinor || 0),
+    igstMinor: Number(tr.dataset.igstMinor || 0)
+  }));
+}
+
+function updateInvoiceTotals() {
+  [...els.invoiceItems.querySelectorAll('tr')].forEach(calculateInvoiceItemRow);
+  const items = getInvoiceItems();
+  const taxable = items.reduce((sum, item) => sum + item.taxableMinor, 0);
+  const cgst = items.reduce((sum, item) => sum + item.cgstMinor, 0);
+  const sgst = items.reduce((sum, item) => sum + item.sgstMinor, 0);
+  const igst = items.reduce((sum, item) => sum + item.igstMinor, 0);
+  const total = taxable + cgst + sgst + igst;
+  renderApplicableTaxColumns();
+  els.invoiceTaxableTotal.textContent = minorToMoney(taxable);
+  els.invoiceCgstTotal.textContent = minorToMoney(cgst);
+  els.invoiceSgstTotal.textContent = minorToMoney(sgst);
+  els.invoiceIgstTotal.textContent = minorToMoney(igst);
+  els.invoiceGrandTotal.textContent = minorToMoney(total);
+  els.voucherBalance.textContent = `Invoice Total ${minorToMoney(total)}`;
+  els.voucherBalance.classList.remove('danger');
+}
+
 function addedLineDefaultForType(type) {
   if (type === 'receipt') return { lockedSide: 'credit' };
   if (type === 'payment') return { lockedSide: 'debit' };
@@ -956,7 +1168,10 @@ function addVoucherLine(line = {}) {
 
 function resetVoucherLinesForType() {
   els.voucherLines.innerHTML = '';
-  for (const line of lineDefaultsForType(els.voucherType.value)) addVoucherLine(line);
+  els.invoiceItems.innerHTML = '';
+  renderVoucherMode();
+  if (isInvoiceType()) addInvoiceItem();
+  else for (const line of lineDefaultsForType(els.voucherType.value)) addVoucherLine(line);
 }
 
 function getVoucherLines() {
@@ -969,6 +1184,7 @@ function getVoucherLines() {
 }
 
 function updateVoucherBalance() {
+  if (isInvoiceType()) return updateInvoiceTotals();
   const lines = getVoucherLines();
   const debit = lines.reduce((sum, line) => sum + line.debitMinor, 0);
   const credit = lines.reduce((sum, line) => sum + line.creditMinor, 0);
@@ -1004,12 +1220,20 @@ function fillVoucherForm(voucherId) {
   els.narration.value = voucher.narration || '';
   renderTagOptions(els.voucherTags, state.voucherTags[voucher.id] || []);
   els.voucherLines.innerHTML = '';
-  voucher.lines.forEach((line) => addVoucherLine({
-    accountId: line.accountId,
-    description: line.description || '',
-    debit: line.debitMinor ? minorToMoney(line.debitMinor) : '',
-    credit: line.creditMinor ? minorToMoney(line.creditMinor) : ''
-  }));
+  els.invoiceItems.innerHTML = '';
+  renderVoucherMode();
+  if (isInvoiceType(voucher.type)) {
+    els.voucherParty.value = voucher.partyAccountId || '';
+    (voucher.items || []).forEach(addInvoiceItem);
+    updateInvoiceTotals();
+  } else {
+    voucher.lines.forEach((line) => addVoucherLine({
+      accountId: line.accountId,
+      description: line.description || '',
+      debit: line.debitMinor ? minorToMoney(line.debitMinor) : '',
+      credit: line.creditMinor ? minorToMoney(line.creditMinor) : ''
+    }));
+  }
 }
 
 function renderTagList() {
@@ -1046,6 +1270,8 @@ async function refreshSnapshot() {
     heads: snapshot.heads || [],
     subheads: snapshot.subheads || [],
     accounts: snapshot.accounts || [],
+    products: snapshot.products || [],
+    hasTransactions: Boolean(snapshot.hasTransactions),
     coaRows: snapshot.coaRows || [],
     tags: snapshot.tags || [],
     coaTags: snapshot.coaTags || { head: {}, subhead: {}, account: {} },
@@ -1060,6 +1286,7 @@ async function refreshSnapshot() {
   renderTree();
   renderDashboard();
   renderCompanyMaster();
+  renderProductMaster();
   if (!state.reportDatesInitialized) {
     els.reportFromDate.value = financialYearStartIso(state.company.financialYearStart);
     state.reportDatesInitialized = true;
@@ -1067,6 +1294,7 @@ async function refreshSnapshot() {
   renderTagList();
   renderTagOptions(els.voucherTags);
   renderVoucherSelect();
+  renderVoucherMode();
   renderTagTargets();
   renderOptions(els.reportAccount, state.accounts, { label: accountLabel });
   renderOptions(els.reportTag, state.tags, { label: (tag) => tag.name });
@@ -1111,7 +1339,8 @@ async function saveCoaForm(level) {
     panNo: controls.panNo?.value,
     registration1: controls.registration1?.value,
     registration2: controls.registration2?.value,
-    registration3: controls.registration3?.value
+    registration3: controls.registration3?.value,
+    state: controls.state?.value
   });
   clearCoaForm(level);
   await refreshSnapshot();
@@ -1176,7 +1405,9 @@ function bindEvents() {
   els.deleteAccount.addEventListener('click', () => deleteCoaForm('account'));
 
   els.voucherType.addEventListener('change', resetVoucherLinesForType);
+  els.voucherParty.addEventListener('change', updateInvoiceTotals);
   els.addLine.addEventListener('click', () => addVoucherLine(addedLineDefaultForType(els.voucherType.value)));
+  els.addInvoiceItem.addEventListener('click', () => addInvoiceItem());
   els.clearVoucher.addEventListener('click', resetVoucherForm);
   els.voucherEditSelect.addEventListener('change', () => fillVoucherForm(els.voucherEditSelect.value));
   els.deleteVoucher.addEventListener('click', async () => {
@@ -1196,8 +1427,10 @@ function bindEvents() {
       invoiceNo: els.invoiceNo.value.trim(),
       invoiceDate: els.invoiceDate.value,
       narration: els.narration.value.trim(),
+      partyAccountId: isInvoiceType() ? els.voucherParty.value : null,
       tagIds: selectedValues(els.voucherTags),
-      lines: getVoucherLines().filter((line) => line.accountId && (line.debitMinor || line.creditMinor))
+      lines: isInvoiceType() ? [] : getVoucherLines().filter((line) => line.accountId && (line.debitMinor || line.creditMinor)),
+      items: isInvoiceType() ? getInvoiceItems() : []
     });
     await refreshSnapshot();
     resetVoucherForm();
@@ -1225,6 +1458,30 @@ function bindEvents() {
     await refreshSnapshot();
     showToast('Tags saved.');
   });
+  els.productForm.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    await dbCall('saveProduct', {
+      id: els.productId.value || null,
+      name: els.productName.value,
+      kind: els.productKind.value,
+      hsnSacCode: els.productHsnSac.value,
+      gstRate: els.productGstRate.value,
+      itcAvailable: els.productItcAvailable.checked,
+      purchaseAccountId: els.productPurchaseAccount.value,
+      salesAccountId: els.productSalesAccount.value
+    });
+    await refreshSnapshot();
+    clearProductForm();
+    showToast('Product / service saved.');
+  });
+  els.clearProduct.addEventListener('click', clearProductForm);
+  els.deleteProduct.addEventListener('click', async () => {
+    if (!els.productId.value) return showToast('Select a product or service first.');
+    await dbCall('deleteProduct', { id: els.productId.value });
+    await refreshSnapshot();
+    clearProductForm();
+    showToast('Product / service deleted.');
+  });
   els.companyForm.addEventListener('submit', async (event) => {
     event.preventDefault();
     await dbCall('saveCompanyMaster', {
@@ -1237,7 +1494,8 @@ function bindEvents() {
       registration1: els.companyRegistration1.value,
       registration2: els.companyRegistration2.value,
       registration3: els.companyRegistration3.value,
-      financialYearStart: els.companyFinancialYearStart.value
+      financialYearStart: els.companyFinancialYearStart.value,
+      gstEnabled: els.companyGstEnabled.checked
     });
     await refreshSnapshot();
     els.reportFromDate.value = financialYearStartIso(state.company.financialYearStart);

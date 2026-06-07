@@ -1,8 +1,8 @@
 import sqlite3InitModule from './vendor/sqlite/index.mjs';
 
-const SCHEMA_VERSION = 6;
-const DB_FILE = '/fame-v6.sqlite3';
-const IDB_NAME = 'fame-sqlite-fallback-v6';
+const SCHEMA_VERSION = 7;
+const DB_FILE = '/fame-v7.sqlite3';
+const IDB_NAME = 'fame-sqlite-fallback-v7';
 const IDB_STORE = 'snapshots';
 const IDB_KEY = 'latest';
 const TABLES = [
@@ -12,10 +12,12 @@ const TABLES = [
   'subhead_accounts',
   'accounts',
   'company_master',
+  'products',
   'tags',
   'coa_tags',
   'vouchers',
   'voucher_lines',
+  'voucher_items',
   'voucher_tags'
 ];
 
@@ -53,7 +55,7 @@ const seedSubheads = [
   ['102100', 'Accounts Receivable', '102000'],
   ['103100', 'Stock', '103000'],
   ['201100', 'Accounts Payable', '201000'],
-  ['202100', 'Duties and Taxes Payable', '202000'],
+  ['202100', 'GST Control Accounts', '202000'],
   ['301100', 'Owner Capital', '301000'],
   ['302100', 'Accumulated Profit and Loss', '302000'],
   ['401100', 'Product Sales', '401000'],
@@ -69,7 +71,9 @@ const seedAccounts = [
   ['102101', 'General Customer', '102100'],
   ['103101', 'Inventory Stock', '103100'],
   ['201101', 'General Supplier', '201100'],
-  ['202101', 'Tax Payable', '202100'],
+  ['202101', 'CGST', '202100'],
+  ['202102', 'SGST', '202100'],
+  ['202103', 'IGST', '202100'],
   ['301101', 'Owner Capital', '301100'],
   ['302101', 'Accumulated Profit and Loss', '302100'],
   ['401101', 'Sales', '401100'],
@@ -189,6 +193,7 @@ function ensureSchema() {
       registration_1 TEXT,
       registration_2 TEXT,
       registration_3 TEXT,
+      state TEXT,
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
       updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
@@ -204,6 +209,19 @@ function ensureSchema() {
       registration_2 TEXT NOT NULL DEFAULT '',
       registration_3 TEXT NOT NULL DEFAULT '',
       financial_year_start TEXT NOT NULL DEFAULT '',
+      gst_enabled INTEGER NOT NULL DEFAULT 0,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE TABLE IF NOT EXISTS products (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL COLLATE NOCASE UNIQUE,
+      kind TEXT NOT NULL CHECK (kind IN ('product','service')),
+      hsn_sac_code TEXT NOT NULL DEFAULT '',
+      gst_rate REAL NOT NULL DEFAULT 0 CHECK (gst_rate >= 0),
+      itc_available INTEGER NOT NULL DEFAULT 1,
+      purchase_account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE RESTRICT,
+      sales_account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE RESTRICT,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
       updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
     CREATE TABLE IF NOT EXISTS tags (
@@ -228,6 +246,7 @@ function ensureSchema() {
       invoice_no TEXT,
       invoice_date TEXT,
       narration TEXT,
+      party_account_id TEXT REFERENCES accounts(id) ON DELETE RESTRICT,
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
       updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
@@ -241,6 +260,19 @@ function ensureSchema() {
       sort_order INTEGER NOT NULL DEFAULT 0,
       CHECK ((debit_minor = 0 AND credit_minor > 0) OR (credit_minor = 0 AND debit_minor > 0))
     );
+    CREATE TABLE IF NOT EXISTS voucher_items (
+      id TEXT PRIMARY KEY,
+      voucher_id TEXT NOT NULL REFERENCES vouchers(id) ON DELETE CASCADE,
+      product_id TEXT NOT NULL REFERENCES products(id) ON DELETE RESTRICT,
+      quantity REAL NOT NULL CHECK (quantity > 0),
+      gst_rate REAL NOT NULL DEFAULT 0,
+      taxable_minor INTEGER NOT NULL CHECK (taxable_minor >= 0),
+      cgst_minor INTEGER NOT NULL DEFAULT 0 CHECK (cgst_minor >= 0),
+      sgst_minor INTEGER NOT NULL DEFAULT 0 CHECK (sgst_minor >= 0),
+      igst_minor INTEGER NOT NULL DEFAULT 0 CHECK (igst_minor >= 0),
+      total_minor INTEGER NOT NULL CHECK (total_minor >= 0),
+      sort_order INTEGER NOT NULL DEFAULT 0
+    );
     CREATE TABLE IF NOT EXISTS voucher_tags (
       voucher_id TEXT NOT NULL REFERENCES vouchers(id) ON DELETE CASCADE,
       tag_id TEXT NOT NULL REFERENCES tags(id) ON DELETE CASCADE,
@@ -251,6 +283,7 @@ function ensureSchema() {
     CREATE INDEX IF NOT EXISTS idx_accounts_subhead ON accounts(subhead_id);
     CREATE INDEX IF NOT EXISTS idx_voucher_lines_voucher ON voucher_lines(voucher_id);
     CREATE INDEX IF NOT EXISTS idx_voucher_lines_account ON voucher_lines(account_id);
+    CREATE INDEX IF NOT EXISTS idx_voucher_items_voucher ON voucher_items(voucher_id);
   `);
 
   const existing = one('SELECT value FROM settings WHERE key = ?', ['schema_version']);
@@ -340,7 +373,7 @@ function listPostingAccounts() {
            h.type_id AS typeId, t.name AS typeName, t.normal_side AS normalSide,
            a.is_personal AS isPersonal, a.gst_no AS gstNo, a.pan_no AS panNo,
            a.registration_1 AS registration1, a.registration_2 AS registration2,
-           a.registration_3 AS registration3,
+           a.registration_3 AS registration3, a.state,
            (a.code = '302101') AS isSystem,
            a.created_at AS createdAt, a.updated_at AS updatedAt,
            EXISTS(SELECT 1 FROM voucher_lines vl WHERE vl.account_id = a.id) AS hasTransactions
@@ -356,11 +389,12 @@ function getCompanyMaster() {
   return one(`
     SELECT name, address, state, country, gst_no AS gstNo, pan_no AS panNo,
            registration_1 AS registration1, registration_2 AS registration2,
-           registration_3 AS registration3, financial_year_start AS financialYearStart
+           registration_3 AS registration3, financial_year_start AS financialYearStart,
+           gst_enabled AS gstEnabled
     FROM company_master WHERE id = 1
   `) || {
     name: '', address: '', state: '', country: '', gstNo: '', panNo: '',
-    registration1: '', registration2: '', registration3: '', financialYearStart: ''
+    registration1: '', registration2: '', registration3: '', financialYearStart: '', gstEnabled: 0
   };
 }
 
@@ -395,24 +429,84 @@ async function saveCompanyMaster(company = {}) {
   const financialYearStart = String(company.financialYearStart || '').trim();
   if (!name) throw new Error('Company name is required.');
   if (!/^\d{4}-\d{2}-\d{2}$/.test(financialYearStart)) throw new Error('Select a financial year start date.');
+  const existing = getCompanyMaster();
+  const hasTransactions = one('SELECT 1 AS yes FROM vouchers LIMIT 1');
+  if (hasTransactions && Boolean(existing.gstEnabled) !== Boolean(company.gstEnabled)) {
+    throw new Error('GST Enabled cannot be changed after transactions have been entered.');
+  }
   transaction(() => exec(`
     INSERT INTO company_master (
       id, name, address, state, country, gst_no, pan_no,
-      registration_1, registration_2, registration_3, financial_year_start, updated_at
-    ) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+      registration_1, registration_2, registration_3, financial_year_start, gst_enabled, updated_at
+    ) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
     ON CONFLICT(id) DO UPDATE SET
       name = excluded.name, address = excluded.address, state = excluded.state,
       country = excluded.country, gst_no = excluded.gst_no, pan_no = excluded.pan_no,
       registration_1 = excluded.registration_1, registration_2 = excluded.registration_2,
       registration_3 = excluded.registration_3,
-      financial_year_start = excluded.financial_year_start, updated_at = CURRENT_TIMESTAMP
+      financial_year_start = excluded.financial_year_start,
+      gst_enabled = excluded.gst_enabled, updated_at = CURRENT_TIMESTAMP
   `, [
     name, String(company.address || '').trim(), String(company.state || '').trim(),
     String(company.country || '').trim(), String(company.gstNo || '').trim(),
     String(company.panNo || '').trim(), String(company.registration1 || '').trim(),
     String(company.registration2 || '').trim(), String(company.registration3 || '').trim(),
-    financialYearStart
+    financialYearStart, company.gstEnabled ? 1 : 0
   ]));
+  await persistIfMirrored();
+  return getSnapshot();
+}
+
+function listProducts() {
+  return all(`
+    SELECT p.id, p.name, p.kind, p.hsn_sac_code AS hsnSacCode, p.gst_rate AS gstRate,
+           p.itc_available AS itcAvailable, p.purchase_account_id AS purchaseAccountId,
+           pa.code AS purchaseAccountCode, pa.name AS purchaseAccountName,
+           p.sales_account_id AS salesAccountId, sa.code AS salesAccountCode,
+           sa.name AS salesAccountName
+    FROM products p
+    JOIN accounts pa ON pa.id = p.purchase_account_id
+    JOIN accounts sa ON sa.id = p.sales_account_id
+    ORDER BY p.name COLLATE NOCASE
+  `);
+}
+
+async function saveProduct(product = {}) {
+  const name = String(product.name || '').trim();
+  const kind = String(product.kind || '');
+  const gstRate = Number(product.gstRate || 0);
+  if (!name) throw new Error('Product or service name is required.');
+  if (!['product', 'service'].includes(kind)) throw new Error('Select product or service.');
+  if (!product.purchaseAccountId || !product.salesAccountId) throw new Error('Select purchase and sales accounts.');
+  if (!Number.isFinite(gstRate) || gstRate < 0) throw new Error('Enter a valid GST rate.');
+  transaction(() => {
+    if (product.id) {
+      exec(`
+        UPDATE products SET name = ?, kind = ?, hsn_sac_code = ?, gst_rate = ?,
+          itc_available = ?, purchase_account_id = ?, sales_account_id = ?,
+          updated_at = CURRENT_TIMESTAMP WHERE id = ?
+      `, [name, kind, String(product.hsnSacCode || '').trim(), gstRate, product.itcAvailable ? 1 : 0,
+        product.purchaseAccountId, product.salesAccountId, product.id]);
+    } else {
+      exec(`
+        INSERT INTO products (
+          id, name, kind, hsn_sac_code, gst_rate, itc_available,
+          purchase_account_id, sales_account_id
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `, [crypto.randomUUID(), name, kind, String(product.hsnSacCode || '').trim(), gstRate,
+        product.itcAvailable ? 1 : 0, product.purchaseAccountId, product.salesAccountId]);
+    }
+  });
+  await persistIfMirrored();
+  return getSnapshot();
+}
+
+async function deleteProduct({ id }) {
+  if (!id) throw new Error('Select a product or service to delete.');
+  if (one('SELECT 1 AS yes FROM voucher_items WHERE product_id = ? LIMIT 1', [id])) {
+    throw new Error('Cannot delete a product or service used in a voucher.');
+  }
+  transaction(() => exec('DELETE FROM products WHERE id = ?', [id]));
   await persistIfMirrored();
   return getSnapshot();
 }
@@ -565,28 +659,29 @@ async function saveCoaItem(item) {
         ? [
             String(item.gstNo || '').trim(), String(item.panNo || '').trim(),
             String(item.registration1 || '').trim(), String(item.registration2 || '').trim(),
-            String(item.registration3 || '').trim()
+            String(item.registration3 || '').trim(), String(item.state || '').trim()
           ]
-        : ['', '', '', '', ''];
+        : ['', '', '', '', '', ''];
       const hasTx = item.id ? one('SELECT 1 AS yes FROM voucher_lines WHERE account_id = ? LIMIT 1', [item.id]) : null;
       if (item.id) {
         if (hasTx) exec(`
           UPDATE accounts SET name = ?, is_personal = ?, gst_no = ?, pan_no = ?,
-            registration_1 = ?, registration_2 = ?, registration_3 = ?, updated_at = CURRENT_TIMESTAMP
+            registration_1 = ?, registration_2 = ?, registration_3 = ?, state = ?,
+            updated_at = CURRENT_TIMESTAMP
           WHERE id = ?
         `, [name, personal, ...personalFields, item.id]);
         else exec(`
           UPDATE accounts SET code = ?, name = ?, subhead_id = ?, is_personal = ?,
             gst_no = ?, pan_no = ?, registration_1 = ?, registration_2 = ?,
-            registration_3 = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?
+            registration_3 = ?, state = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?
         `, [code, name, item.subheadId, personal, ...personalFields, item.id]);
       } else {
         item.id = crypto.randomUUID();
         exec(`
           INSERT INTO accounts (
             id, code, name, subhead_id, is_personal, gst_no, pan_no,
-            registration_1, registration_2, registration_3
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            registration_1, registration_2, registration_3, state
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `, [item.id, code, name, item.subheadId, personal, ...personalFields]);
       }
       replaceCoaTagLinks('account', item.id, item.tagIds || []);
@@ -698,8 +793,95 @@ function getVoucherLinesPayload(voucherId) {
   `, [voucherId]);
 }
 
+function getVoucherItemsPayload(voucherId) {
+  return all(`
+    SELECT vi.id, vi.product_id AS productId, p.name AS productName,
+           p.hsn_sac_code AS hsnSacCode, vi.gst_rate AS gstRate,
+           vi.quantity, vi.taxable_minor AS taxableMinor,
+           vi.cgst_minor AS cgstMinor, vi.sgst_minor AS sgstMinor,
+           vi.igst_minor AS igstMinor, vi.total_minor AS totalMinor,
+           vi.sort_order AS sortOrder
+    FROM voucher_items vi
+    JOIN products p ON p.id = vi.product_id
+    WHERE vi.voucher_id = ?
+    ORDER BY vi.sort_order
+  `, [voucherId]);
+}
+
+function invoicePostingPayload(voucher) {
+  if (!['purchase', 'sales'].includes(voucher.type)) return null;
+  if (!voucher.partyAccountId) throw new Error('Select the supplier or customer account.');
+  const party = one('SELECT id, state FROM accounts WHERE id = ? AND is_personal = 1', [voucher.partyAccountId]);
+  if (!party) throw new Error('Purchase and sales invoices require a personal account.');
+  const company = getCompanyMaster();
+  const gstEnabled = Boolean(company.gstEnabled);
+  if (gstEnabled && (!String(company.state || '').trim() || !String(party.state || '').trim())) {
+    throw new Error('Company and party states are required for GST calculation.');
+  }
+  const interstate = gstEnabled
+    && String(company.state).trim().toLowerCase() !== String(party.state).trim().toLowerCase();
+  const taxAccounts = Object.fromEntries(
+    all(`SELECT id, code FROM accounts WHERE code IN ('202101','202102','202103')`).map((row) => [row.code, row.id])
+  );
+  if (gstEnabled && Object.keys(taxAccounts).length !== 3) throw new Error('GST control accounts are not configured.');
+
+  const postings = new Map();
+  const addPosting = (accountId, debitMinor, creditMinor, description) => {
+    if (!accountId || (!debitMinor && !creditMinor)) return;
+    const current = postings.get(accountId) || { accountId, debitMinor: 0, creditMinor: 0, description };
+    current.debitMinor += debitMinor;
+    current.creditMinor += creditMinor;
+    postings.set(accountId, current);
+  };
+  const items = (voucher.items || []).map((item, index) => {
+    const product = one(`
+      SELECT id, name, gst_rate AS gstRate, itc_available AS itcAvailable,
+             purchase_account_id AS purchaseAccountId, sales_account_id AS salesAccountId
+      FROM products WHERE id = ?
+    `, [item.productId]);
+    const quantity = Number(item.quantity || 0);
+    const taxableMinor = Number(item.taxableMinor || 0);
+    if (!product || quantity <= 0 || taxableMinor <= 0) throw new Error(`Complete invoice item ${index + 1}.`);
+    const totalTaxMinor = gstEnabled ? Math.round(taxableMinor * Number(product.gstRate || 0) / 100) : 0;
+    const igstMinor = interstate ? totalTaxMinor : 0;
+    const cgstMinor = interstate ? 0 : Math.floor(totalTaxMinor / 2);
+    const sgstMinor = interstate ? 0 : totalTaxMinor - cgstMinor;
+    const totalMinor = taxableMinor + totalTaxMinor;
+    const description = product.name;
+    if (voucher.type === 'purchase') {
+      const claimItc = gstEnabled && Boolean(product.itcAvailable);
+      addPosting(product.purchaseAccountId, taxableMinor + (claimItc ? 0 : totalTaxMinor), 0, description);
+      if (claimItc) {
+        addPosting(taxAccounts['202101'], cgstMinor, 0, 'Input CGST');
+        addPosting(taxAccounts['202102'], sgstMinor, 0, 'Input SGST');
+        addPosting(taxAccounts['202103'], igstMinor, 0, 'Input IGST');
+      }
+    } else {
+      addPosting(product.salesAccountId, 0, taxableMinor, description);
+      addPosting(taxAccounts['202101'], 0, cgstMinor, 'Output CGST');
+      addPosting(taxAccounts['202102'], 0, sgstMinor, 'Output SGST');
+      addPosting(taxAccounts['202103'], 0, igstMinor, 'Output IGST');
+    }
+    return {
+      productId: product.id, quantity, gstRate: Number(product.gstRate || 0),
+      taxableMinor, cgstMinor, sgstMinor,
+      igstMinor, totalMinor, sortOrder: index
+    };
+  });
+  if (!items.length) throw new Error('Add at least one product or service.');
+  const invoiceTotalMinor = items.reduce((sum, item) => sum + item.totalMinor, 0);
+  addPosting(
+    voucher.partyAccountId,
+    voucher.type === 'sales' ? invoiceTotalMinor : 0,
+    voucher.type === 'purchase' ? invoiceTotalMinor : 0,
+    voucher.type === 'sales' ? 'Customer' : 'Supplier'
+  );
+  return { lines: [...postings.values()], items };
+}
+
 async function saveVoucher(voucher) {
-  const lines = (voucher.lines || []).filter((line) => line.accountId);
+  const invoicePayload = invoicePostingPayload(voucher);
+  const lines = invoicePayload?.lines || (voucher.lines || []).filter((line) => line.accountId);
   if (!voucher.type || !voucher.voucherDate) throw new Error('Voucher type and date are required.');
   if (lines.length < 2) throw new Error('A voucher needs at least two posting lines.');
   const debit = lines.reduce((sum, line) => sum + Number(line.debitMinor || 0), 0);
@@ -717,17 +899,25 @@ async function saveVoucher(voucher) {
         : nextVoucherNo(voucher.type, voucher.voucherDate, id);
       exec(
         `UPDATE vouchers
-         SET voucher_no = ?, type = ?, voucher_date = ?, reference_no = ?, invoice_no = ?, invoice_date = ?, narration = ?, updated_at = CURRENT_TIMESTAMP
+         SET voucher_no = ?, type = ?, voucher_date = ?, reference_no = ?, invoice_no = ?,
+             invoice_date = ?, narration = ?, party_account_id = ?, updated_at = CURRENT_TIMESTAMP
          WHERE id = ?`,
-        [voucherNo, voucher.type, voucher.voucherDate, voucher.referenceNo || null, voucher.invoiceNo || null, voucher.invoiceDate || null, voucher.narration || null, id]
+        [voucherNo, voucher.type, voucher.voucherDate, voucher.referenceNo || null,
+          voucher.invoiceNo || null, voucher.invoiceDate || null, voucher.narration || null,
+          voucher.partyAccountId || null, id]
       );
       exec('DELETE FROM voucher_lines WHERE voucher_id = ?', [id]);
+      exec('DELETE FROM voucher_items WHERE voucher_id = ?', [id]);
     } else {
       id = crypto.randomUUID();
       exec(
-        `INSERT INTO vouchers (id, voucher_no, type, voucher_date, reference_no, invoice_no, invoice_date, narration)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-        [id, nextVoucherNo(voucher.type, voucher.voucherDate), voucher.type, voucher.voucherDate, voucher.referenceNo || null, voucher.invoiceNo || null, voucher.invoiceDate || null, voucher.narration || null]
+        `INSERT INTO vouchers (
+          id, voucher_no, type, voucher_date, reference_no, invoice_no,
+          invoice_date, narration, party_account_id
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [id, nextVoucherNo(voucher.type, voucher.voucherDate), voucher.type,
+          voucher.voucherDate, voucher.referenceNo || null, voucher.invoiceNo || null,
+          voucher.invoiceDate || null, voucher.narration || null, voucher.partyAccountId || null]
       );
     }
     lines.forEach((line, index) => {
@@ -737,6 +927,16 @@ async function saveVoucher(voucher) {
         [crypto.randomUUID(), id, line.accountId, line.description || null, Number(line.debitMinor || 0), Number(line.creditMinor || 0), index]
       );
     });
+    for (const item of invoicePayload?.items || []) {
+      exec(`
+        INSERT INTO voucher_items (
+          id, voucher_id, product_id, quantity, taxable_minor,
+          gst_rate, cgst_minor, sgst_minor, igst_minor, total_minor, sort_order
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `, [crypto.randomUUID(), id, item.productId, item.quantity, item.taxableMinor,
+        item.gstRate, item.cgstMinor, item.sgstMinor, item.igstMinor, item.totalMinor,
+        item.sortOrder]);
+    }
     replaceVoucherTagLinks(id, voucher.tagIds || []);
   });
   await persistIfMirrored();
@@ -766,13 +966,17 @@ function getVoucherList() {
   return all(`
     SELECT v.id, v.voucher_no AS voucherNo, v.type, v.voucher_date AS voucherDate,
            v.reference_no AS referenceNo, v.invoice_no AS invoiceNo, v.invoice_date AS invoiceDate,
-           v.narration, SUM(vl.debit_minor) AS amountMinor
+           v.narration, v.party_account_id AS partyAccountId, SUM(vl.debit_minor) AS amountMinor
     FROM vouchers v
     JOIN voucher_lines vl ON vl.voucher_id = v.id
     GROUP BY v.id
     ORDER BY v.voucher_date DESC, v.created_at DESC
     LIMIT 500
-  `).map((voucher) => ({ ...voucher, lines: getVoucherLinesPayload(voucher.id) }));
+  `).map((voucher) => ({
+    ...voucher,
+    lines: getVoucherLinesPayload(voucher.id),
+    items: getVoucherItemsPayload(voucher.id)
+  }));
 }
 
 function getTrialBalance() {
@@ -1067,6 +1271,8 @@ function getSnapshot() {
     subheads: listSubheads(),
     accounts: postingAccounts,
     company: getCompanyMaster(),
+    products: listProducts(),
+    hasTransactions: Boolean(one('SELECT 1 AS yes FROM vouchers LIMIT 1')),
     coaRows: listCoaRows(),
     tags: listTags(),
     coaTags: {
@@ -1102,27 +1308,38 @@ function replaceData(backup) {
       for (const row of backup.data.accounts || []) exec(`
         INSERT INTO accounts (
           id, code, name, subhead_id, is_personal, gst_no, pan_no,
-          registration_1, registration_2, registration_3, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          registration_1, registration_2, registration_3, state, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `, [
         row.id, row.code, row.name, row.subhead_id, row.is_personal || 0,
         row.gst_no || '', row.pan_no || '', row.registration_1 || '',
-        row.registration_2 || '', row.registration_3 || '', row.created_at, row.updated_at
+        row.registration_2 || '', row.registration_3 || '', row.state || '',
+        row.created_at, row.updated_at
       ]);
       for (const row of backup.data.company_master || []) exec(`
         INSERT INTO company_master (
           id, name, address, state, country, gst_no, pan_no,
-          registration_1, registration_2, registration_3, financial_year_start, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          registration_1, registration_2, registration_3, financial_year_start,
+          gst_enabled, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `, [
         row.id, row.name, row.address, row.state, row.country, row.gst_no, row.pan_no,
         row.registration_1, row.registration_2, row.registration_3,
-        row.financial_year_start, row.updated_at
+        row.financial_year_start, row.gst_enabled || 0, row.updated_at
       ]);
+      for (const row of backup.data.products || []) exec(`
+        INSERT INTO products (
+          id, name, kind, hsn_sac_code, gst_rate, itc_available,
+          purchase_account_id, sales_account_id, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `, [row.id, row.name, row.kind, row.hsn_sac_code, row.gst_rate,
+        row.itc_available, row.purchase_account_id, row.sales_account_id,
+        row.created_at, row.updated_at]);
       for (const row of backup.data.tags || []) exec('INSERT INTO tags (id, name, color, created_at, updated_at) VALUES (?, ?, ?, ?, ?)', [row.id, row.name, row.color, row.created_at, row.updated_at]);
       for (const row of backup.data.coa_tags || []) exec('INSERT INTO coa_tags (entity_type, entity_id, tag_id) VALUES (?, ?, ?)', [row.entity_type, row.entity_id, row.tag_id]);
-      for (const row of backup.data.vouchers || []) exec('INSERT INTO vouchers (id, voucher_no, type, voucher_date, reference_no, invoice_no, invoice_date, narration, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', [row.id, row.voucher_no, row.type, row.voucher_date, row.reference_no, row.invoice_no, row.invoice_date, row.narration, row.created_at, row.updated_at]);
+      for (const row of backup.data.vouchers || []) exec('INSERT INTO vouchers (id, voucher_no, type, voucher_date, reference_no, invoice_no, invoice_date, narration, party_account_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', [row.id, row.voucher_no, row.type, row.voucher_date, row.reference_no, row.invoice_no, row.invoice_date, row.narration, row.party_account_id, row.created_at, row.updated_at]);
       for (const row of backup.data.voucher_lines || []) exec('INSERT INTO voucher_lines (id, voucher_id, account_id, description, debit_minor, credit_minor, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?)', [row.id, row.voucher_id, row.account_id, row.description, row.debit_minor, row.credit_minor, row.sort_order]);
+      for (const row of backup.data.voucher_items || []) exec('INSERT INTO voucher_items (id, voucher_id, product_id, quantity, gst_rate, taxable_minor, cgst_minor, sgst_minor, igst_minor, total_minor, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', [row.id, row.voucher_id, row.product_id, row.quantity, row.gst_rate, row.taxable_minor, row.cgst_minor, row.sgst_minor, row.igst_minor, row.total_minor, row.sort_order]);
       for (const row of backup.data.voucher_tags || []) exec('INSERT INTO voucher_tags (voucher_id, tag_id) VALUES (?, ?)', [row.voucher_id, row.tag_id]);
       exec(`
         INSERT INTO settings (key, value) VALUES (?, ?)
@@ -1152,6 +1369,8 @@ const handlers = {
   saveVoucher,
   deleteVoucher,
   saveCompanyMaster,
+  saveProduct,
+  deleteProduct,
   reportDaybook,
   reportLedger,
   reportProfitLoss,

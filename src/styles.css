@@ -364,6 +364,28 @@ textarea {
   border-bottom: 1px solid var(--line);
 }
 
+.product-row {
+  display: grid;
+  width: 100%;
+  min-height: auto;
+  gap: 4px;
+  padding: 12px;
+  border-bottom: 1px solid var(--line);
+  border-radius: 0;
+  background: transparent;
+  color: var(--ink);
+  text-align: left;
+}
+
+.product-row:hover {
+  background: #f8fafc;
+}
+
+.product-row span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
 .tag-chip {
   display: inline-flex;
   align-items: center;
@@ -600,6 +622,18 @@ textarea {
 .report-content {
   overflow-x: auto;
   border-top: 1px solid var(--line);
+}
+
+#invoiceItemEditor table {
+  min-width: 980px;
+}
+
+#invoiceItemEditor select {
+  min-width: 220px;
+}
+
+#invoiceItemEditor .amount-input {
+  min-width: 110px;
 }
 
 .report-group-row td {
