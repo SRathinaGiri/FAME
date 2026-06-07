@@ -27,7 +27,8 @@ body {
 
 button,
 input,
-select {
+select,
+textarea {
   font: inherit;
 }
 
@@ -294,7 +295,8 @@ select[multiple] {
 }
 
 input:focus,
-select:focus {
+select:focus,
+textarea:focus {
   outline: 3px solid rgba(36, 125, 104, 0.18);
   border-color: var(--accent);
 }
@@ -304,6 +306,26 @@ select:disabled {
   background: #eef2f7;
   color: #98a2b3;
   cursor: not-allowed;
+}
+
+textarea {
+  resize: vertical;
+}
+
+.nested-fields {
+  grid-column: 1 / -1;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #f8fafc;
+}
+
+.full-width {
+  grid-column: 1 / -1;
+}
+
+.configuration-panel {
+  max-width: 980px;
 }
 
 .checkbox-row {
@@ -506,6 +528,33 @@ select:disabled {
 .report-actions {
   display: flex;
   gap: 8px;
+}
+
+.report-radio-field {
+  min-width: 220px;
+  margin: 0;
+  padding: 7px 10px 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+
+.report-radio-field legend {
+  padding: 0 4px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.report-radio-field label {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-right: 12px;
+  font-size: 13px;
+}
+
+.report-radio-field input {
+  width: auto;
 }
 
 .report-heading {

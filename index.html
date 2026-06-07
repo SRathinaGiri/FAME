@@ -26,6 +26,7 @@
           <button class="nav-tab" data-view="entries">Entries</button>
           <button class="nav-tab" data-view="reports">Reports</button>
           <button class="nav-tab" data-view="tags">Tags</button>
+          <button class="nav-tab" data-view="configuration">Configuration</button>
           <button class="nav-tab" data-view="backup">Backup</button>
         </nav>
         <div class="storage-status" id="storageStatus">Starting database...</div>
@@ -195,6 +196,17 @@
                   Tags
                   <select id="accountEntryTags" multiple></select>
                 </label>
+                <label class="checkbox-row">
+                  <input id="accountIsPersonal" type="checkbox">
+                  Personal account
+                </label>
+                <div id="accountPersonalFields" class="form-grid nested-fields hidden">
+                  <label>GST No.<input id="accountGstNo" autocomplete="off"></label>
+                  <label>PAN<input id="accountPanNo" autocomplete="off"></label>
+                  <label>Government Registration 1<input id="accountRegistration1" autocomplete="off"></label>
+                  <label>Government Registration 2<input id="accountRegistration2" autocomplete="off"></label>
+                  <label>Government Registration 3<input id="accountRegistration3" autocomplete="off"></label>
+                </div>
                 <p class="field-note">
                   Codes use 6 digits: type, head, sub-head, account. Only Accounts are available in voucher entry.
                 </p>
@@ -287,12 +299,22 @@
               <button class="report-tab" type="button" data-report="ledger">Ledger</button>
               <button class="report-tab" type="button" data-report="profitLoss">Profit and Loss</button>
               <button class="report-tab" type="button" data-report="balanceSheet">Balance Sheet</button>
+              <button class="report-tab" type="button" data-report="tag">Tag Report</button>
             </div>
             <form id="reportForm" class="report-toolbar">
               <label id="reportAccountField" class="hidden">
                 Account
                 <select id="reportAccount"></select>
               </label>
+              <label id="reportTagField" class="hidden">
+                Tag
+                <select id="reportTag"></select>
+              </label>
+              <fieldset id="reportTagModeField" class="report-radio-field hidden">
+                <legend>Tag Type</legend>
+                <label><input type="radio" name="reportTagMode" value="account" checked> Account based</label>
+                <label><input type="radio" name="reportTagMode" value="transaction"> Transaction based</label>
+              </fieldset>
               <label id="reportFromField">
                 From
                 <input id="reportFromDate" type="date">
@@ -376,6 +398,31 @@
               </form>
             </section>
           </div>
+        </section>
+
+        <section class="view" id="configurationView">
+          <section class="panel configuration-panel">
+            <div class="panel-heading">
+              <div>
+                <h2>Company Master</h2>
+                <p class="muted-text">Company identity, registrations, and financial-year settings.</p>
+              </div>
+            </div>
+            <form id="companyForm" class="form-grid">
+              <label>Company Name<input id="companyName" required autocomplete="organization"></label>
+              <label class="full-width">Address<textarea id="companyAddress" rows="4" autocomplete="street-address"></textarea></label>
+              <label>State<input id="companyState" autocomplete="address-level1"></label>
+              <label>Country<input id="companyCountry" autocomplete="country-name"></label>
+              <label>GST No.<input id="companyGstNo" autocomplete="off"></label>
+              <label>PAN<input id="companyPanNo" autocomplete="off"></label>
+              <label>Government Registration 1<input id="companyRegistration1" autocomplete="off"></label>
+              <label>Government Registration 2<input id="companyRegistration2" autocomplete="off"></label>
+              <label>Government Registration 3<input id="companyRegistration3" autocomplete="off"></label>
+              <label>Financial Year Start Date<input id="companyFinancialYearStart" type="date" required></label>
+              <p class="field-note full-width">The month and day are reused each year to set the default report From date.</p>
+              <div class="action-row full-width"><button type="submit">Save Configuration</button></div>
+            </form>
+          </section>
         </section>
 
         <section class="view" id="backupView">

@@ -29,9 +29,11 @@ const state = {
   recent: [],
   vouchers: [],
   trialBalance: [],
+  company: {},
   editingVoucherId: null,
   activeReport: 'daybook',
   reportExport: null,
+  reportDatesInitialized: false,
   serviceWorkerReloaded: sessionStorage.getItem('fame-sw-reloaded') === '1',
   installPrompt: null
 };
@@ -73,12 +75,23 @@ const els = {
   accountEntryCode: document.querySelector('#accountEntryCode'),
   accountEntryName: document.querySelector('#accountEntryName'),
   accountEntryTags: document.querySelector('#accountEntryTags'),
+  accountIsPersonal: document.querySelector('#accountIsPersonal'),
+  accountPersonalFields: document.querySelector('#accountPersonalFields'),
+  accountGstNo: document.querySelector('#accountGstNo'),
+  accountPanNo: document.querySelector('#accountPanNo'),
+  accountRegistration1: document.querySelector('#accountRegistration1'),
+  accountRegistration2: document.querySelector('#accountRegistration2'),
+  accountRegistration3: document.querySelector('#accountRegistration3'),
   deleteAccount: document.querySelector('#deleteAccount'),
   clearAccount: document.querySelector('#clearAccount'),
   reportTabs: document.querySelectorAll('.report-tab'),
   reportForm: document.querySelector('#reportForm'),
   reportAccountField: document.querySelector('#reportAccountField'),
   reportAccount: document.querySelector('#reportAccount'),
+  reportTagField: document.querySelector('#reportTagField'),
+  reportTag: document.querySelector('#reportTag'),
+  reportTagModeField: document.querySelector('#reportTagModeField'),
+  reportTagModes: document.querySelectorAll('input[name="reportTagMode"]'),
   reportFromField: document.querySelector('#reportFromField'),
   reportFromDate: document.querySelector('#reportFromDate'),
   reportToField: document.querySelector('#reportToField'),
@@ -123,6 +136,17 @@ const els = {
   tagTargetType: document.querySelector('#tagTargetType'),
   tagTarget: document.querySelector('#tagTarget'),
   tagAssignmentTags: document.querySelector('#tagAssignmentTags'),
+  companyForm: document.querySelector('#companyForm'),
+  companyName: document.querySelector('#companyName'),
+  companyAddress: document.querySelector('#companyAddress'),
+  companyState: document.querySelector('#companyState'),
+  companyCountry: document.querySelector('#companyCountry'),
+  companyGstNo: document.querySelector('#companyGstNo'),
+  companyPanNo: document.querySelector('#companyPanNo'),
+  companyRegistration1: document.querySelector('#companyRegistration1'),
+  companyRegistration2: document.querySelector('#companyRegistration2'),
+  companyRegistration3: document.querySelector('#companyRegistration3'),
+  companyFinancialYearStart: document.querySelector('#companyFinancialYearStart'),
   installButton: document.querySelector('#installButton'),
   toast: document.querySelector('#toast')
 };
@@ -148,8 +172,13 @@ function todayIso() {
   return local.toISOString().slice(0, 10);
 }
 
-function yearStartIso() {
-  return `${todayIso().slice(0, 4)}-01-01`;
+function financialYearStartIso(configuredStart = '') {
+  const today = todayIso();
+  const [, month = '01', day = '01'] = String(configuredStart || '').split('-');
+  const currentYearStart = `${today.slice(0, 4)}-${month}-${day}`;
+  return today >= currentYearStart
+    ? currentYearStart
+    : `${Number(today.slice(0, 4)) - 1}-${month}-${day}`;
 }
 
 function escapeHtml(value) {
@@ -231,7 +260,7 @@ function accountMatchesFilter(account, filter) {
 }
 
 function renderAccountOptions(select, { filter = 'all', preferredCodes = [] } = {}) {
-  const accounts = state.accounts.filter((account) => accountMatchesFilter(account, filter));
+  const accounts = state.accounts.filter((account) => !account.isSystem && accountMatchesFilter(account, filter));
   const preferred = preferredCodes.map((code) => accounts.find((account) => account.code === code)).filter(Boolean);
   const rest = accounts.filter((account) => !preferred.includes(account));
   renderOptions(select, [...preferred, ...rest], { label: accountLabel, empty: 'Select account' });
@@ -293,6 +322,12 @@ const coaForms = {
     code: els.accountEntryCode,
     name: els.accountEntryName,
     tags: els.accountEntryTags,
+    isPersonal: els.accountIsPersonal,
+    gstNo: els.accountGstNo,
+    panNo: els.accountPanNo,
+    registration1: els.accountRegistration1,
+    registration2: els.accountRegistration2,
+    registration3: els.accountRegistration3,
     deleteButton: els.deleteAccount
   })
 };
@@ -300,17 +335,20 @@ const coaForms = {
 function updateCoaButtons() {
   for (const level of ['head', 'subhead', 'account']) {
     const controls = coaForms[level]();
-    controls.deleteButton.disabled = !controls.id.value;
+    controls.deleteButton.disabled = !controls.id.value || controls.form.dataset.system === 'true';
   }
 }
 
 function clearCoaForm(level) {
   const controls = coaForms[level]();
   controls.form.reset();
+  controls.form.dataset.system = 'false';
   controls.id.value = '';
+  controls.name.disabled = false;
   controls.code.disabled = false;
   if (controls.subhead) controls.subhead.disabled = false;
   renderCoaMasters();
+  if (level === 'account') renderAccountPersonalFields();
 }
 
 function renderCoaMasters() {
@@ -332,6 +370,7 @@ function renderCoaMasters() {
 function fillCoaForm(row) {
   if (!row || row.level === 'type') return;
   const controls = coaForms[row.level]();
+  controls.form.dataset.system = String(Boolean(row.isSystem));
   controls.id.value = row.id;
   if (row.level === 'head') {
     controls.type.value = row.typeId;
@@ -348,12 +387,40 @@ function fillCoaForm(row) {
   }
   controls.code.value = row.code;
   controls.name.value = row.name;
+  controls.name.disabled = Boolean(row.isSystem);
+  if (row.level === 'account') {
+    controls.isPersonal.checked = Boolean(row.isPersonal);
+    controls.gstNo.value = row.gstNo || '';
+    controls.panNo.value = row.panNo || '';
+    controls.registration1.value = row.registration1 || '';
+    controls.registration2.value = row.registration2 || '';
+    controls.registration3.value = row.registration3 || '';
+    renderAccountPersonalFields();
+  }
   renderTagOptions(controls.tags, currentCoaTagIds(row.level, row.id));
-  const lockAccountStructure = row.level === 'account' && row.hasTransactions;
+  const lockAccountStructure = row.level === 'account' && (row.hasTransactions || row.isSystem);
   controls.code.disabled = lockAccountStructure;
   if (controls.subhead) controls.subhead.disabled = lockAccountStructure;
   updateCoaButtons();
   controls.form.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
+function renderAccountPersonalFields() {
+  els.accountPersonalFields.classList.toggle('hidden', !els.accountIsPersonal.checked);
+}
+
+function renderCompanyMaster() {
+  const company = state.company || {};
+  els.companyName.value = company.name || '';
+  els.companyAddress.value = company.address || '';
+  els.companyState.value = company.state || '';
+  els.companyCountry.value = company.country || '';
+  els.companyGstNo.value = company.gstNo || '';
+  els.companyPanNo.value = company.panNo || '';
+  els.companyRegistration1.value = company.registration1 || '';
+  els.companyRegistration2.value = company.registration2 || '';
+  els.companyRegistration3.value = company.registration3 || '';
+  els.companyFinancialYearStart.value = company.financialYearStart || `${todayIso().slice(0, 4)}-04-01`;
 }
 
 function renderTree() {
@@ -661,6 +728,57 @@ function renderBalanceSheet(data) {
   bindReportLinks(els.reportContent);
 }
 
+function selectedTagReportMode() {
+  return [...els.reportTagModes].find((input) => input.checked)?.value || 'account';
+}
+
+function renderTagReport(data) {
+  const modeLabel = data.mode === 'account' ? 'Account based' : 'Transaction based';
+  els.reportTitle.textContent = `Tag Report: ${data.tag.name}`;
+  els.reportMeta.textContent = `${modeLabel} | ${dateRangeLabel(els.reportFromDate.value, els.reportToDate.value)}`;
+  reportKpis([
+    { label: 'Debit', value: minorToMoney(data.totals.debitMinor) },
+    { label: 'Credit', value: minorToMoney(data.totals.creditMinor) },
+    { label: 'Net Balance', value: balanceText(data.totals.balanceMinor) }
+  ]);
+  const body = data.rows.length
+    ? data.rows.map((row) => `
+        <tr>
+          <td>${accountButton(row)}</td>
+          <td class="amount">${minorToMoney(row.debitMinor)}</td>
+          <td class="amount">${minorToMoney(row.creditMinor)}</td>
+          <td class="amount">${balanceText(row.balanceMinor)}</td>
+        </tr>
+      `).join('') + `
+        <tr class="report-total-row">
+          <td>Total</td>
+          <td class="amount">${minorToMoney(data.totals.debitMinor)}</td>
+          <td class="amount">${minorToMoney(data.totals.creditMinor)}</td>
+          <td class="amount">${balanceText(data.totals.balanceMinor)}</td>
+        </tr>
+      `
+    : '<tr><td colspan="4" class="empty">No accounts or transactions found for this tag and period.</td></tr>';
+  els.reportContent.innerHTML = reportTable(
+    [{ label: 'Account' }, { label: 'Debit', amount: true }, { label: 'Credit', amount: true }, { label: 'Net Balance', amount: true }],
+    body
+  );
+  state.reportExport = {
+    title: els.reportTitle.textContent,
+    meta: els.reportMeta.textContent,
+    headers: ['Account', 'Debit', 'Credit', 'Net Balance'],
+    rows: [
+      ...data.rows.map((row) => [
+        `${row.accountCode} - ${row.accountName}`,
+        minorToNumber(row.debitMinor),
+        minorToNumber(row.creditMinor),
+        balanceText(row.balanceMinor)
+      ]),
+      ['Total', minorToNumber(data.totals.debitMinor), minorToNumber(data.totals.creditMinor), balanceText(data.totals.balanceMinor)]
+    ]
+  };
+  bindReportLinks(els.reportContent);
+}
+
 async function runReport() {
   els.reportDrilldown.classList.add('hidden');
   if (state.activeReport === 'daybook') {
@@ -673,6 +791,21 @@ async function runReport() {
     }));
   } else if (state.activeReport === 'profitLoss') {
     renderProfitLoss(await dbCall('reportProfitLoss', { fromDate: els.reportFromDate.value, toDate: els.reportToDate.value }));
+  } else if (state.activeReport === 'tag') {
+    if (!els.reportTag.value) {
+      els.reportTitle.textContent = 'Tag Report';
+      els.reportMeta.textContent = 'Create and select a tag to run this report.';
+      els.reportSummary.innerHTML = '';
+      els.reportContent.innerHTML = '<div class="empty-list">No tags are available.</div>';
+      state.reportExport = null;
+      return;
+    }
+    renderTagReport(await dbCall('reportTag', {
+      tagId: els.reportTag.value,
+      mode: selectedTagReportMode(),
+      fromDate: els.reportFromDate.value,
+      toDate: els.reportToDate.value
+    }));
   } else {
     renderBalanceSheet(await dbCall('reportBalanceSheet', { asOfDate: els.reportAsOfDate.value }));
   }
@@ -683,7 +816,10 @@ function setReportType(type, run = true) {
   els.reportTabs.forEach((tab) => tab.classList.toggle('active', tab.dataset.report === type));
   const isLedger = type === 'ledger';
   const isBalanceSheet = type === 'balanceSheet';
+  const isTag = type === 'tag';
   els.reportAccountField.classList.toggle('hidden', !isLedger);
+  els.reportTagField.classList.toggle('hidden', !isTag);
+  els.reportTagModeField.classList.toggle('hidden', !isTag);
   els.reportFromField.classList.toggle('hidden', isBalanceSheet);
   els.reportToField.classList.toggle('hidden', isBalanceSheet);
   els.reportAsOfField.classList.toggle('hidden', !isBalanceSheet);
@@ -694,9 +830,20 @@ async function openAccountDrilldown(accountId) {
   const isBalanceSheet = state.activeReport === 'balanceSheet';
   const fromDate = isBalanceSheet ? '' : els.reportFromDate.value;
   const toDate = isBalanceSheet ? els.reportAsOfDate.value : els.reportToDate.value;
-  const data = await dbCall('reportLedger', { accountId, fromDate, toDate });
+  const data = state.activeReport === 'tag'
+    ? await dbCall('reportTagTransactions', {
+        tagId: els.reportTag.value,
+        mode: selectedTagReportMode(),
+        accountId,
+        fromDate,
+        toDate
+      })
+    : await dbCall('reportLedger', { accountId, fromDate, toDate });
   els.drilldownTitle.textContent = `${data.account.code} - ${data.account.name}`;
-  els.drilldownMeta.textContent = dateRangeLabel(fromDate, toDate);
+  const tagLabel = state.activeReport === 'tag'
+    ? `${state.tags.find((tag) => tag.id === els.reportTag.value)?.name || 'Tag'} | `
+    : '';
+  els.drilldownMeta.textContent = `${tagLabel}${dateRangeLabel(fromDate, toDate)}`;
   els.drilldownContent.innerHTML = ledgerTable(data);
   els.reportDrilldown.classList.remove('hidden');
   bindReportLinks(els.drilldownContent);
@@ -893,6 +1040,7 @@ function renderSelectedTargetTags() {
 async function refreshSnapshot() {
   const snapshot = await dbCall('snapshot');
   const selectedReportAccount = els.reportAccount.value;
+  const selectedReportTag = els.reportTag.value;
   Object.assign(state, {
     accountTypes: snapshot.accountTypes || [],
     heads: snapshot.heads || [],
@@ -904,19 +1052,29 @@ async function refreshSnapshot() {
     voucherTags: snapshot.voucherTags || {},
     recent: snapshot.recent || [],
     vouchers: snapshot.vouchers || [],
-    trialBalance: snapshot.trialBalance || []
+    trialBalance: snapshot.trialBalance || [],
+    company: snapshot.company || {}
   });
   els.storageStatus.textContent = `${snapshot.meta.persistence} | SQLite ${snapshot.meta.sqliteVersion}`;
   renderCoaMasters();
   renderTree();
   renderDashboard();
+  renderCompanyMaster();
+  if (!state.reportDatesInitialized) {
+    els.reportFromDate.value = financialYearStartIso(state.company.financialYearStart);
+    state.reportDatesInitialized = true;
+  }
   renderTagList();
   renderTagOptions(els.voucherTags);
   renderVoucherSelect();
   renderTagTargets();
   renderOptions(els.reportAccount, state.accounts, { label: accountLabel });
+  renderOptions(els.reportTag, state.tags, { label: (tag) => tag.name });
   if (selectedReportAccount && state.accounts.some((account) => account.id === selectedReportAccount)) {
     els.reportAccount.value = selectedReportAccount;
+  }
+  if (selectedReportTag && state.tags.some((tag) => tag.id === selectedReportTag)) {
+    els.reportTag.value = selectedReportTag;
   }
 }
 
@@ -924,7 +1082,7 @@ function switchView(viewName) {
   els.navTabs.forEach((tab) => tab.classList.toggle('active', tab.dataset.view === viewName));
   els.views.forEach((view) => view.classList.toggle('active', view.id === `${viewName}View`));
   els.viewTitle.textContent = [...els.navTabs].find((tab) => tab.dataset.view === viewName)?.textContent || 'F.A.M.E';
-  if (viewName === 'reports' && !state.reportExport) runReport().catch((error) => showToast(error.message));
+  if (viewName === 'reports') runReport().catch((error) => showToast(error.message));
 }
 
 function downloadJson(filename, data) {
@@ -947,7 +1105,13 @@ async function saveCoaForm(level) {
     subheadId: controls.subhead?.value,
     code: controls.code.value,
     name: controls.name.value,
-    tagIds: selectedValues(controls.tags)
+    tagIds: selectedValues(controls.tags),
+    isPersonal: controls.isPersonal?.checked || false,
+    gstNo: controls.gstNo?.value,
+    panNo: controls.panNo?.value,
+    registration1: controls.registration1?.value,
+    registration2: controls.registration2?.value,
+    registration3: controls.registration3?.value
   });
   clearCoaForm(level);
   await refreshSnapshot();
@@ -965,6 +1129,9 @@ async function deleteCoaForm(level) {
 function bindEvents() {
   els.navTabs.forEach((tab) => tab.addEventListener('click', () => switchView(tab.dataset.view)));
   els.reportTabs.forEach((tab) => tab.addEventListener('click', () => setReportType(tab.dataset.report)));
+  els.reportTagModes.forEach((input) => input.addEventListener('change', () => {
+    if (state.activeReport === 'tag') runReport().catch((error) => showToast(error.message));
+  }));
   els.reportForm.addEventListener('submit', (event) => {
     event.preventDefault();
     runReport().catch((error) => showToast(error.message));
@@ -988,6 +1155,7 @@ function bindEvents() {
     suggestCode('account', coaForms.account()).catch(() => undefined);
   });
   els.accountEntrySubhead.addEventListener('change', () => suggestCode('account', coaForms.account()).catch(() => undefined));
+  els.accountIsPersonal.addEventListener('change', renderAccountPersonalFields);
   els.clearHead.addEventListener('click', () => clearCoaForm('head'));
   els.clearSubhead.addEventListener('click', () => clearCoaForm('subhead'));
   els.clearAccount.addEventListener('click', () => clearCoaForm('account'));
@@ -1057,6 +1225,24 @@ function bindEvents() {
     await refreshSnapshot();
     showToast('Tags saved.');
   });
+  els.companyForm.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    await dbCall('saveCompanyMaster', {
+      name: els.companyName.value,
+      address: els.companyAddress.value,
+      state: els.companyState.value,
+      country: els.companyCountry.value,
+      gstNo: els.companyGstNo.value,
+      panNo: els.companyPanNo.value,
+      registration1: els.companyRegistration1.value,
+      registration2: els.companyRegistration2.value,
+      registration3: els.companyRegistration3.value,
+      financialYearStart: els.companyFinancialYearStart.value
+    });
+    await refreshSnapshot();
+    els.reportFromDate.value = financialYearStartIso(state.company.financialYearStart);
+    showToast('Configuration saved.');
+  });
 
   els.exportForm.addEventListener('submit', async (event) => {
     event.preventDefault();
@@ -1118,7 +1304,7 @@ async function boot() {
   document.querySelectorAll('input[type="date"]').forEach((input) => input.setAttribute('lang', appLocale));
   bindEvents();
   els.voucherDate.value = todayIso();
-  els.reportFromDate.value = yearStartIso();
+  els.reportFromDate.value = `${todayIso().slice(0, 4)}-01-01`;
   els.reportToDate.value = todayIso();
   els.reportAsOfDate.value = todayIso();
   setReportType('daybook', false);
