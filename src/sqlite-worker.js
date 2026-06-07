@@ -655,11 +655,38 @@ function accountMatchesFilter(account, filter) {
   return true;
 }
 
-function nextVoucherNo(type, date) {
-  const yyyymm = String(date || '').slice(0, 7).replace('-', '');
-  const prefix = `${type.toUpperCase().slice(0, 3)}-${yyyymm}`;
-  const row = one('SELECT COUNT(*) AS count FROM vouchers WHERE voucher_no LIKE ?', [`${prefix}-%`]);
-  return `${prefix}-${String((row?.count || 0) + 1).padStart(4, '0')}`;
+function voucherSeriesPrefix(type, date) {
+  const financialYearStart = financialYearStartFor(date);
+  if (!financialYearStart) throw new Error('A valid voucher date is required.');
+  const startYear = Number(financialYearStart.slice(0, 4));
+  const endYear = startYear + 1;
+  const yearCode = type === 'sales'
+    ? `${startYear}${String(endYear).slice(-2)}`
+    : `${String(startYear).slice(-2)}${String(endYear).slice(-2)}`;
+  const typeCode = {
+    receipt: 'R',
+    payment: 'V',
+    purchase: 'P',
+    sales: 'S',
+    journal: 'J'
+  }[type];
+  if (!typeCode) throw new Error('Unknown voucher type.');
+  return `${typeCode}-${yearCode}`;
+}
+
+function nextVoucherNo(type, date, excludeId = '') {
+  const prefix = voucherSeriesPrefix(type, date);
+  const rows = all(`
+    SELECT voucher_no AS voucherNo
+    FROM vouchers
+    WHERE voucher_no LIKE ?
+      AND (? = '' OR id <> ?)
+  `, [`${prefix}-%`, excludeId, excludeId]);
+  const nextSequence = rows.reduce((maximum, row) => {
+    const sequence = Number(String(row.voucherNo).slice(prefix.length + 1));
+    return Number.isInteger(sequence) ? Math.max(maximum, sequence) : maximum;
+  }, 0) + 1;
+  return `${prefix}-${String(nextSequence).padStart(4, '0')}`;
 }
 
 function getVoucherLinesPayload(voucherId) {
@@ -683,11 +710,18 @@ async function saveVoucher(voucher) {
   let id = voucher.id;
   transaction(() => {
     if (id) {
+      const existing = one('SELECT type, voucher_date AS voucherDate, voucher_no AS voucherNo FROM vouchers WHERE id = ?', [id]);
+      if (!existing) throw new Error('The selected voucher was not found.');
+      const existingPrefix = voucherSeriesPrefix(existing.type, existing.voucherDate);
+      const requestedPrefix = voucherSeriesPrefix(voucher.type, voucher.voucherDate);
+      const voucherNo = existingPrefix === requestedPrefix
+        ? existing.voucherNo
+        : nextVoucherNo(voucher.type, voucher.voucherDate, id);
       exec(
         `UPDATE vouchers
-         SET type = ?, voucher_date = ?, reference_no = ?, invoice_no = ?, invoice_date = ?, narration = ?, updated_at = CURRENT_TIMESTAMP
+         SET voucher_no = ?, type = ?, voucher_date = ?, reference_no = ?, invoice_no = ?, invoice_date = ?, narration = ?, updated_at = CURRENT_TIMESTAMP
          WHERE id = ?`,
-        [voucher.type, voucher.voucherDate, voucher.referenceNo || null, voucher.invoiceNo || null, voucher.invoiceDate || null, voucher.narration || null, id]
+        [voucherNo, voucher.type, voucher.voucherDate, voucher.referenceNo || null, voucher.invoiceNo || null, voucher.invoiceDate || null, voucher.narration || null, id]
       );
       exec('DELETE FROM voucher_lines WHERE voucher_id = ?', [id]);
     } else {
