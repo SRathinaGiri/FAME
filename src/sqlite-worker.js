@@ -660,9 +660,7 @@ function voucherSeriesPrefix(type, date) {
   if (!financialYearStart) throw new Error('A valid voucher date is required.');
   const startYear = Number(financialYearStart.slice(0, 4));
   const endYear = startYear + 1;
-  const yearCode = type === 'sales'
-    ? `${startYear}${String(endYear).slice(-2)}`
-    : `${String(startYear).slice(-2)}${String(endYear).slice(-2)}`;
+  const yearCode = `${String(startYear).slice(-2)}${String(endYear).slice(-2)}`;
   const typeCode = {
     receipt: 'R',
     payment: 'V',
