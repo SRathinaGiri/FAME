@@ -27,6 +27,23 @@ npm run dev
 
 Open `http://127.0.0.1:5173/`.
 
+## Sample Data
+
+Generate sample electronics trading company data with the Tkinter utility:
+
+```bash
+pip install -r tools/requirements-sample-data.txt
+python tools/sample_data_generator.py
+```
+
+CLI mode is also available:
+
+```bash
+python tools/sample_data_generator.py --no-gui --transactions 1000 --accounts 100 --products 40 --assets 12 --password "change-me"
+```
+
+Supplying `--password` writes a F.A.M.E encrypted backup JSON compatible with the Backup import flow.
+
 SQLite OPFS requires cross-origin isolation headers. The Vite config sends:
 
 - `Cross-Origin-Opener-Policy: same-origin`
