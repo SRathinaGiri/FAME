@@ -8,7 +8,7 @@ F.A.M.E is a local-first accounting PWA built as a self-contained browser app. T
 - SQLite WASM database running in a module worker
 - OPFS-first persistence with transient fallback when OPFS is unavailable
 - Hierarchical chart of accounts
-- Receipt, payment, purchase invoice, sales invoice, and journal voucher entry
+- Receipt, payment, purchase invoice, sales invoice, expense, income, and journal voucher entry
 - Tags for accounts, heading accounts, and vouchers
 - Product and service masters with HSN/SAC, GST rates, and ITC eligibility
 - GST-aware purchase and sales invoices with intra-state CGST/SGST and inter-state IGST

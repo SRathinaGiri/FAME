@@ -1,8 +1,8 @@
 import sqlite3InitModule from './vendor/sqlite/index.mjs';
 
-const SCHEMA_VERSION = 7;
-const DB_FILE = '/fame-v7.sqlite3';
-const IDB_NAME = 'fame-sqlite-fallback-v7';
+const SCHEMA_VERSION = 8;
+const DB_FILE = '/fame-v8.sqlite3';
+const IDB_NAME = 'fame-sqlite-fallback-v8';
 const IDB_STORE = 'snapshots';
 const IDB_KEY = 'latest';
 const TABLES = [
@@ -240,7 +240,7 @@ function ensureSchema() {
     CREATE TABLE IF NOT EXISTS vouchers (
       id TEXT PRIMARY KEY,
       voucher_no TEXT NOT NULL UNIQUE,
-      type TEXT NOT NULL CHECK (type IN ('receipt','payment','purchase','sales','journal')),
+      type TEXT NOT NULL CHECK (type IN ('receipt','payment','purchase','sales','expense','income','journal')),
       voucher_date TEXT NOT NULL,
       reference_no TEXT,
       invoice_no TEXT,
@@ -761,6 +761,8 @@ function voucherSeriesPrefix(type, date) {
     payment: 'V',
     purchase: 'P',
     sales: 'S',
+    expense: 'E',
+    income: 'I',
     journal: 'J'
   }[type];
   if (!typeCode) throw new Error('Unknown voucher type.');
@@ -809,10 +811,10 @@ function getVoucherItemsPayload(voucherId) {
 }
 
 function invoicePostingPayload(voucher) {
-  if (!['purchase', 'sales'].includes(voucher.type)) return null;
+  if (!['purchase', 'sales', 'expense', 'income'].includes(voucher.type)) return null;
   if (!voucher.partyAccountId) throw new Error('Select the supplier or customer account.');
   const party = one('SELECT id, state FROM accounts WHERE id = ? AND is_personal = 1', [voucher.partyAccountId]);
-  if (!party) throw new Error('Purchase and sales invoices require a personal account.');
+  if (!party) throw new Error('Purchase, sales, expense and income vouchers require a personal account.');
   const company = getCompanyMaster();
   const gstEnabled = Boolean(company.gstEnabled);
   if (gstEnabled && (!String(company.state || '').trim() || !String(party.state || '').trim())) {
@@ -848,7 +850,7 @@ function invoicePostingPayload(voucher) {
     const sgstMinor = interstate ? 0 : totalTaxMinor - cgstMinor;
     const totalMinor = taxableMinor + totalTaxMinor;
     const description = product.name;
-    if (voucher.type === 'purchase') {
+    if (['purchase', 'expense'].includes(voucher.type)) {
       const claimItc = gstEnabled && Boolean(product.itcAvailable);
       addPosting(product.purchaseAccountId, taxableMinor + (claimItc ? 0 : totalTaxMinor), 0, description);
       if (claimItc) {
@@ -872,9 +874,9 @@ function invoicePostingPayload(voucher) {
   const invoiceTotalMinor = items.reduce((sum, item) => sum + item.totalMinor, 0);
   addPosting(
     voucher.partyAccountId,
-    voucher.type === 'sales' ? invoiceTotalMinor : 0,
-    voucher.type === 'purchase' ? invoiceTotalMinor : 0,
-    voucher.type === 'sales' ? 'Customer' : 'Supplier'
+    ['sales', 'income'].includes(voucher.type) ? invoiceTotalMinor : 0,
+    ['purchase', 'expense'].includes(voucher.type) ? invoiceTotalMinor : 0,
+    ['sales', 'income'].includes(voucher.type) ? 'Customer' : 'Supplier'
   );
   return { lines: [...postings.values()], items };
 }

@@ -1005,7 +1005,11 @@ function lineDefaultsForType(type) {
 }
 
 function isInvoiceType(type = els.voucherType.value) {
-  return type === 'purchase' || type === 'sales';
+  return ['purchase', 'sales', 'expense', 'income'].includes(type);
+}
+
+function isOutwardInvoiceType(type = els.voucherType.value) {
+  return type === 'sales' || type === 'income';
 }
 
 function renderVoucherMode() {
@@ -1016,17 +1020,17 @@ function renderVoucherMode() {
   els.voucherPartyField.classList.toggle('hidden', !invoice);
   els.addLine.classList.toggle('hidden', invoice);
   els.addInvoiceItem.classList.toggle('hidden', !invoice);
-  els.voucherPartyLabel.textContent = els.voucherType.value === 'purchase' ? 'Supplier' : 'Customer';
+  els.voucherPartyLabel.textContent = isOutwardInvoiceType() ? 'Customer' : 'Supplier';
   document.querySelectorAll('.invoice-gst-column').forEach((element) => element.classList.toggle('hidden', !gstEnabled));
   if (invoice) {
     const selectedParty = els.voucherParty.value;
-    const partyHeadCode = els.voucherType.value === 'purchase' ? '201000' : '102000';
+    const partyHeadCode = isOutwardInvoiceType() ? '102000' : '201000';
     const parties = state.accounts.filter((account) =>
       account.isPersonal && !account.isSystem && account.headCode === partyHeadCode
     );
     renderOptions(els.voucherParty, parties, {
       label: (account) => `${accountLabel(account)}${account.state ? ` | ${account.state}` : ''}`,
-      empty: `Select ${els.voucherType.value === 'purchase' ? 'supplier' : 'customer'}`
+      empty: `Select ${isOutwardInvoiceType() ? 'customer' : 'supplier'}`
     });
     if (parties.some((account) => account.id === selectedParty)) els.voucherParty.value = selectedParty;
   }
