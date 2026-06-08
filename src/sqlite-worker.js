@@ -1,8 +1,8 @@
 import sqlite3InitModule from './vendor/sqlite/index.mjs';
 
-const SCHEMA_VERSION = 9;
-const DB_FILE = '/fame-v9.sqlite3';
-const IDB_NAME = 'fame-sqlite-fallback-v9';
+const SCHEMA_VERSION = 10;
+const DB_FILE = '/fame-v10.sqlite3';
+const IDB_NAME = 'fame-sqlite-fallback-v10';
 const IDB_STORE = 'snapshots';
 const IDB_KEY = 'latest';
 const TABLES = [
@@ -13,6 +13,7 @@ const TABLES = [
   'accounts',
   'company_master',
   'products',
+  'fixed_assets',
   'tags',
   'coa_tags',
   'vouchers',
@@ -39,14 +40,17 @@ const seedHeads = [
   ['101000', 'Cash and Bank', 'asset'],
   ['102000', 'Receivables', 'asset'],
   ['103000', 'Inventory', 'asset'],
+  ['104000', 'Fixed Assets', 'asset'],
   ['201000', 'Payables', 'liability'],
   ['202000', 'Duties and Taxes', 'liability'],
   ['301000', 'Capital', 'equity'],
   ['302000', 'Accumulated Profit and Loss', 'equity'],
   ['401000', 'Sales', 'income'],
   ['402000', 'Service Income', 'income'],
+  ['403000', 'Other Income', 'income'],
   ['501000', 'Purchases', 'expense'],
-  ['502000', 'Operating Expenses', 'expense']
+  ['502000', 'Operating Expenses', 'expense'],
+  ['503000', 'Asset Disposal Losses', 'expense']
 ];
 
 const seedSubheads = [
@@ -54,15 +58,20 @@ const seedSubheads = [
   ['101200', 'Bank', '101000'],
   ['102100', 'Accounts Receivable', '102000'],
   ['103100', 'Stock', '103000'],
+  ['104100', 'Tangible Fixed Assets', '104000'],
+  ['104900', 'Accumulated Depreciation', '104000'],
   ['201100', 'Accounts Payable', '201000'],
   ['202100', 'GST Control Accounts', '202000'],
   ['301100', 'Owner Capital', '301000'],
   ['302100', 'Accumulated Profit and Loss', '302000'],
   ['401100', 'Product Sales', '401000'],
   ['402100', 'Service Income', '402000'],
+  ['403100', 'Profit on Sale of Assets', '403000'],
   ['501100', 'Purchase Accounts', '501000'],
   ['502100', 'Rent', '502000'],
-  ['502200', 'Salary', '502000']
+  ['502200', 'Salary', '502000'],
+  ['502300', 'Depreciation', '502000'],
+  ['503100', 'Loss on Sale of Assets', '503000']
 ];
 
 const seedAccounts = [
@@ -70,6 +79,8 @@ const seedAccounts = [
   ['101201', 'Bank Account', '101200'],
   ['102101', 'General Customer', '102100'],
   ['103101', 'Inventory Stock', '103100'],
+  ['104101', 'Plant and Machinery', '104100'],
+  ['104901', 'Accumulated Depreciation', '104900'],
   ['201101', 'General Supplier', '201100'],
   ['202101', 'CGST', '202100'],
   ['202102', 'SGST', '202100'],
@@ -78,9 +89,12 @@ const seedAccounts = [
   ['302101', 'Accumulated Profit and Loss', '302100'],
   ['401101', 'Sales', '401100'],
   ['402101', 'Service Income', '402100'],
+  ['403101', 'Profit on Sale of Assets', '403100'],
   ['501101', 'Purchases', '501100'],
   ['502101', 'Rent Expense', '502100'],
-  ['502201', 'Salary Expense', '502200']
+  ['502201', 'Salary Expense', '502200'],
+  ['502301', 'Depreciation Expense', '502300'],
+  ['503101', 'Loss on Sale of Assets', '503100']
 ];
 
 function exec(sql, bind) {
@@ -224,6 +238,22 @@ function ensureSchema() {
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
       updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
+    CREATE TABLE IF NOT EXISTS fixed_assets (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      asset_account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE RESTRICT,
+      purchase_voucher_id TEXT REFERENCES vouchers(id) ON DELETE SET NULL,
+      purchase_date TEXT NOT NULL,
+      purchase_amount_minor INTEGER NOT NULL CHECK (purchase_amount_minor >= 0),
+      depreciation_method TEXT NOT NULL CHECK (depreciation_method IN ('SLM','WDV')),
+      depreciation_rate REAL NOT NULL DEFAULT 0 CHECK (depreciation_rate >= 0),
+      scrap_value_minor INTEGER NOT NULL DEFAULT 0 CHECK (scrap_value_minor >= 0),
+      sale_voucher_id TEXT REFERENCES vouchers(id) ON DELETE SET NULL,
+      sale_date TEXT,
+      sale_amount_minor INTEGER NOT NULL DEFAULT 0 CHECK (sale_amount_minor >= 0),
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
     CREATE TABLE IF NOT EXISTS tags (
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL COLLATE NOCASE UNIQUE,
@@ -284,6 +314,7 @@ function ensureSchema() {
     CREATE INDEX IF NOT EXISTS idx_voucher_lines_voucher ON voucher_lines(voucher_id);
     CREATE INDEX IF NOT EXISTS idx_voucher_lines_account ON voucher_lines(account_id);
     CREATE INDEX IF NOT EXISTS idx_voucher_items_voucher ON voucher_items(voucher_id);
+    CREATE INDEX IF NOT EXISTS idx_fixed_assets_account ON fixed_assets(asset_account_id);
   `);
 
   const existing = one('SELECT value FROM settings WHERE key = ?', ['schema_version']);
@@ -523,6 +554,133 @@ async function deleteProduct({ id }) {
   transaction(() => exec('DELETE FROM products WHERE id = ?', [id]));
   await persistIfMirrored();
   return getSnapshot();
+}
+
+function listFixedAssets() {
+  return all(`
+    SELECT fa.id, fa.name, fa.asset_account_id AS assetAccountId,
+           a.code AS assetAccountCode, a.name AS assetAccountName,
+           fa.purchase_voucher_id AS purchaseVoucherId,
+           pv.voucher_no AS purchaseVoucherNo,
+           fa.purchase_date AS purchaseDate,
+           fa.purchase_amount_minor AS purchaseAmountMinor,
+           fa.depreciation_method AS depreciationMethod,
+           fa.depreciation_rate AS depreciationRate,
+           fa.scrap_value_minor AS scrapValueMinor,
+           fa.sale_voucher_id AS saleVoucherId,
+           sv.voucher_no AS saleVoucherNo,
+           fa.sale_date AS saleDate,
+           fa.sale_amount_minor AS saleAmountMinor
+    FROM fixed_assets fa
+    JOIN accounts a ON a.id = fa.asset_account_id
+    LEFT JOIN vouchers pv ON pv.id = fa.purchase_voucher_id
+    LEFT JOIN vouchers sv ON sv.id = fa.sale_voucher_id
+    ORDER BY fa.purchase_date, fa.name COLLATE NOCASE
+  `);
+}
+
+function isoToUtc(value) {
+  const [year, month, day] = String(value).split('-').map(Number);
+  return Date.UTC(year, month - 1, day);
+}
+
+function addDaysIso(value, days) {
+  const date = new Date(isoToUtc(value) + days * 86400000);
+  return date.toISOString().slice(0, 10);
+}
+
+function nextFinancialYearStart(date) {
+  const start = financialYearStartFor(date);
+  const configured = getCompanyMaster().financialYearStart || '2000-04-01';
+  const [, month = '04', day = '01'] = configured.split('-');
+  return `${Number(start.slice(0, 4)) + 1}-${month}-${day}`;
+}
+
+function daysInclusive(fromDate, toDate) {
+  if (!fromDate || !toDate || toDate < fromDate) return 0;
+  return Math.floor((isoToUtc(toDate) - isoToUtc(fromDate)) / 86400000) + 1;
+}
+
+function depreciationForRange(asset, fromDate, toDate, openingWdvMinor) {
+  const activeFrom = [fromDate, asset.purchaseDate].filter(Boolean).sort().at(-1);
+  const activeTo = asset.saleDate && asset.saleDate < toDate ? asset.saleDate : toDate;
+  const activeDays = daysInclusive(activeFrom, activeTo);
+  if (!activeDays || openingWdvMinor <= Number(asset.scrapValueMinor || 0)) return { depreciationMinor: 0, activeDays };
+  const yearDays = daysInclusive(financialYearStartFor(fromDate), addDaysIso(nextFinancialYearStart(fromDate), -1)) || 365;
+  const baseMinor = asset.depreciationMethod === 'WDV'
+    ? openingWdvMinor
+    : Number(asset.purchaseAmountMinor || 0);
+  const annualDepMinor = Math.round(baseMinor * Number(asset.depreciationRate || 0) / 100);
+  const proratedMinor = Math.round(annualDepMinor * activeDays / yearDays);
+  const maxDepMinor = Math.max(0, openingWdvMinor - Number(asset.scrapValueMinor || 0));
+  return { depreciationMinor: Math.min(proratedMinor, maxDepMinor), activeDays };
+}
+
+function depreciationPosition(asset, asOfDate) {
+  let cursor = financialYearStartFor(asset.purchaseDate);
+  let wdvMinor = Number(asset.purchaseAmountMinor || 0);
+  let depreciationMinor = 0;
+  while (cursor && cursor <= asOfDate) {
+    const yearEnd = addDaysIso(nextFinancialYearStart(cursor), -1);
+    const periodEnd = yearEnd < asOfDate ? yearEnd : asOfDate;
+    const result = depreciationForRange(asset, cursor, periodEnd, wdvMinor);
+    depreciationMinor += result.depreciationMinor;
+    wdvMinor -= result.depreciationMinor;
+    if (periodEnd >= asOfDate || (asset.saleDate && periodEnd >= asset.saleDate)) break;
+    cursor = nextFinancialYearStart(cursor);
+  }
+  return { depreciationMinor, wdvMinor };
+}
+
+function fixedAssetScheduleRows(asOfDate) {
+  const financialYearStart = financialYearStartFor(asOfDate);
+  const financialYearEnd = addDaysIso(nextFinancialYearStart(asOfDate), -1);
+  const rows = listFixedAssets().map((asset) => {
+    const opening = depreciationPosition(asset, addDaysIso(financialYearStart, -1));
+    const additionMinor = asset.purchaseDate >= financialYearStart && asset.purchaseDate <= financialYearEnd
+      ? Number(asset.purchaseAmountMinor || 0)
+      : 0;
+    const disposalMinor = asset.saleDate && asset.saleDate >= financialYearStart && asset.saleDate <= financialYearEnd
+      ? Number(asset.saleAmountMinor || 0)
+      : 0;
+    const yearOpeningWdvMinor = asset.purchaseDate >= financialYearStart
+      ? Number(asset.purchaseAmountMinor || 0)
+      : opening.wdvMinor;
+    const yearEnd = asset.saleDate && asset.saleDate < financialYearEnd ? asset.saleDate : financialYearEnd;
+    const current = depreciationForRange(asset, financialYearStart, yearEnd, yearOpeningWdvMinor);
+    const closingWdvMinor = Math.max(
+      Number(asset.scrapValueMinor || 0),
+      yearOpeningWdvMinor - current.depreciationMinor
+    );
+    return {
+      ...asset,
+      financialYearStart,
+      financialYearEnd,
+      openingWdvMinor: asset.purchaseDate >= financialYearStart ? 0 : opening.wdvMinor,
+      additionMinor,
+      disposalMinor,
+      depreciationDays: current.activeDays,
+      depreciationMinor: current.depreciationMinor,
+      accumulatedDepreciationMinor: opening.depreciationMinor + current.depreciationMinor,
+      closingWdvMinor
+    };
+  });
+  const totals = rows.reduce((sum, row) => ({
+    openingWdvMinor: sum.openingWdvMinor + row.openingWdvMinor,
+    additionMinor: sum.additionMinor + row.additionMinor,
+    disposalMinor: sum.disposalMinor + row.disposalMinor,
+    depreciationMinor: sum.depreciationMinor + row.depreciationMinor,
+    accumulatedDepreciationMinor: sum.accumulatedDepreciationMinor + row.accumulatedDepreciationMinor,
+    closingWdvMinor: sum.closingWdvMinor + row.closingWdvMinor
+  }), {
+    openingWdvMinor: 0,
+    additionMinor: 0,
+    disposalMinor: 0,
+    depreciationMinor: 0,
+    accumulatedDepreciationMinor: 0,
+    closingWdvMinor: 0
+  });
+  return { financialYearStart, financialYearEnd, rows, totals };
 }
 
 function listCoaRows() {
@@ -824,6 +982,19 @@ function getVoucherItemsPayload(voucherId) {
   `, [voucherId]);
 }
 
+function getVoucherFixedAssetPayload(voucherId) {
+  return one(`
+    SELECT id, name, asset_account_id AS assetAccountId,
+           purchase_voucher_id AS purchaseVoucherId, purchase_date AS purchaseDate,
+           purchase_amount_minor AS purchaseAmountMinor,
+           depreciation_method AS depreciationMethod, depreciation_rate AS depreciationRate,
+           scrap_value_minor AS scrapValueMinor, sale_voucher_id AS saleVoucherId,
+           sale_date AS saleDate, sale_amount_minor AS saleAmountMinor
+    FROM fixed_assets
+    WHERE purchase_voucher_id = ? OR sale_voucher_id = ?
+  `, [voucherId, voucherId]);
+}
+
 function invoicePostingPayload(voucher) {
   if (!['purchase', 'sales', 'expense', 'income'].includes(voucher.type)) return null;
   if (!voucher.partyAccountId) throw new Error('Select the supplier or customer account.');
@@ -849,6 +1020,23 @@ function invoicePostingPayload(voucher) {
     current.creditMinor += creditMinor;
     postings.set(accountId, current);
   };
+  const fixedAsset = voucher.fixedAsset || {};
+  const isFixedAssetPurchase = voucher.type === 'purchase' && fixedAsset.enabled;
+  const isFixedAssetSale = voucher.type === 'sales' && fixedAsset.enabled;
+  const fixedAssetAccount = isFixedAssetPurchase
+    ? one(`
+        SELECT a.id FROM accounts a
+        JOIN subhead_accounts s ON s.id = a.subhead_id
+        JOIN head_accounts h ON h.id = s.head_id
+        WHERE a.id = ? AND h.code = '104000'
+      `, [fixedAsset.assetAccountId])
+    : null;
+  if (isFixedAssetPurchase && !fixedAssetAccount) throw new Error('Select a fixed asset account.');
+  const soldAsset = isFixedAssetSale
+    ? one('SELECT * FROM fixed_assets WHERE id = ? AND sale_voucher_id IS NULL', [fixedAsset.assetId])
+    : null;
+  if (isFixedAssetSale && !soldAsset) throw new Error('Select an unsold fixed asset.');
+
   const items = (voucher.items || []).map((item, index) => {
     const product = one(`
       SELECT id, name, gst_rate AS gstRate, itc_available AS itcAvailable,
@@ -866,14 +1054,19 @@ function invoicePostingPayload(voucher) {
     const description = product.name;
     if (['purchase', 'expense'].includes(voucher.type)) {
       const claimItc = gstEnabled && Boolean(product.itcAvailable);
-      addPosting(product.purchaseAccountId, taxableMinor + (claimItc ? 0 : totalTaxMinor), 0, description);
+      addPosting(
+        isFixedAssetPurchase ? fixedAsset.assetAccountId : product.purchaseAccountId,
+        taxableMinor + (claimItc ? 0 : totalTaxMinor),
+        0,
+        isFixedAssetPurchase ? (fixedAsset.name || description) : description
+      );
       if (claimItc) {
         addPosting(taxAccounts['202101'], cgstMinor, 0, 'Input CGST');
         addPosting(taxAccounts['202102'], sgstMinor, 0, 'Input SGST');
         addPosting(taxAccounts['202103'], igstMinor, 0, 'Input IGST');
       }
     } else {
-      addPosting(product.salesAccountId, 0, taxableMinor, description);
+      if (!isFixedAssetSale) addPosting(product.salesAccountId, 0, taxableMinor, description);
       addPosting(taxAccounts['202101'], 0, cgstMinor, 'Output CGST');
       addPosting(taxAccounts['202102'], 0, sgstMinor, 'Output SGST');
       addPosting(taxAccounts['202103'], 0, igstMinor, 'Output IGST');
@@ -886,6 +1079,31 @@ function invoicePostingPayload(voucher) {
   });
   if (!items.length) throw new Error('Add at least one product or service.');
   const invoiceTotalMinor = items.reduce((sum, item) => sum + item.totalMinor, 0);
+  if (isFixedAssetSale) {
+    const assetForDep = {
+      purchaseDate: soldAsset.purchase_date,
+      purchaseAmountMinor: Number(soldAsset.purchase_amount_minor || 0),
+      depreciationMethod: soldAsset.depreciation_method,
+      depreciationRate: Number(soldAsset.depreciation_rate || 0),
+      scrapValueMinor: Number(soldAsset.scrap_value_minor || 0),
+      saleDate: voucher.voucherDate
+    };
+    const saleTaxableMinor = items.reduce((sum, item) => sum + item.taxableMinor, 0);
+    const depreciation = depreciationPosition(assetForDep, voucher.voucherDate).depreciationMinor;
+    const bookValueMinor = Math.max(0, Number(soldAsset.purchase_amount_minor || 0) - depreciation);
+    const profitMinor = Math.max(0, saleTaxableMinor - bookValueMinor);
+    const lossMinor = Math.max(0, bookValueMinor - saleTaxableMinor);
+    const accounts = Object.fromEntries(
+      all(`SELECT id, code FROM accounts WHERE code IN ('104901','403101','503101')`).map((row) => [row.code, row.id])
+    );
+    if (!accounts['104901'] || !accounts['403101'] || !accounts['503101']) {
+      throw new Error('Fixed asset disposal accounts are not configured.');
+    }
+    addPosting(soldAsset.asset_account_id, 0, Number(soldAsset.purchase_amount_minor || 0), soldAsset.name);
+    addPosting(accounts['104901'], depreciation, 0, `Accumulated depreciation on ${soldAsset.name}`);
+    addPosting(accounts['403101'], 0, profitMinor, `Profit on sale of ${soldAsset.name}`);
+    addPosting(accounts['503101'], lossMinor, 0, `Loss on sale of ${soldAsset.name}`);
+  }
   addPosting(
     voucher.partyAccountId,
     ['sales', 'income'].includes(voucher.type) ? invoiceTotalMinor : 0,
@@ -953,6 +1171,38 @@ async function saveVoucher(voucher) {
         item.gstRate, item.cgstMinor, item.sgstMinor, item.igstMinor, item.totalMinor,
         item.sortOrder]);
     }
+    if (voucher.fixedAsset?.enabled && voucher.type === 'purchase') {
+      const purchaseAmountMinor = lines
+        .filter((line) => line.accountId === voucher.fixedAsset.assetAccountId)
+        .reduce((sum, line) => sum + Number(line.debitMinor || 0), 0);
+      exec('DELETE FROM fixed_assets WHERE purchase_voucher_id = ?', [id]);
+      exec(`
+        INSERT INTO fixed_assets (
+          id, name, asset_account_id, purchase_voucher_id, purchase_date,
+          purchase_amount_minor, depreciation_method, depreciation_rate,
+          scrap_value_minor
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `, [
+        crypto.randomUUID(),
+        String(voucher.fixedAsset.name || '').trim() || `Asset ${id.slice(0, 8)}`,
+        voucher.fixedAsset.assetAccountId,
+        id,
+        voucher.voucherDate,
+        purchaseAmountMinor,
+        voucher.fixedAsset.depreciationMethod === 'WDV' ? 'WDV' : 'SLM',
+        Number(voucher.fixedAsset.depreciationRate || 0),
+        Number(voucher.fixedAsset.scrapValueMinor || 0)
+      ]);
+    }
+    if (voucher.fixedAsset?.enabled && voucher.type === 'sales') {
+      const saleAmountMinor = (invoicePayload?.items || []).reduce((sum, item) => sum + Number(item.taxableMinor || 0), 0);
+      exec(`
+        UPDATE fixed_assets
+        SET sale_voucher_id = ?, sale_date = ?, sale_amount_minor = ?,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+      `, [id, voucher.voucherDate, saleAmountMinor, voucher.fixedAsset.assetId]);
+    }
     replaceVoucherTagLinks(id, voucher.tagIds || []);
   });
   await persistIfMirrored();
@@ -991,7 +1241,8 @@ function getVoucherList() {
   `).map((voucher) => ({
     ...voucher,
     lines: getVoucherLinesPayload(voucher.id),
-    items: getVoucherItemsPayload(voucher.id)
+    items: getVoucherItemsPayload(voucher.id),
+    fixedAsset: getVoucherFixedAssetPayload(voucher.id)
   }));
 }
 
@@ -1232,6 +1483,31 @@ function reportTrialBalance({ asOfDate = '' } = {}) {
   return { asOfDate, financialYearStart, rows, totals };
 }
 
+function reportFixedAssetRegister({ asOfDate = '' } = {}) {
+  const rows = listFixedAssets().map((asset, index) => {
+    const position = depreciationPosition(asset, asOfDate || asset.saleDate || new Date().toISOString().slice(0, 10));
+    return {
+      slNo: index + 1,
+      ...asset,
+      accumulatedDepreciationMinor: position.depreciationMinor,
+      wdvMinor: position.wdvMinor,
+      status: asset.saleDate ? 'Sold' : 'Active'
+    };
+  });
+  const totals = rows.reduce((sum, row) => ({
+    purchaseAmountMinor: sum.purchaseAmountMinor + Number(row.purchaseAmountMinor || 0),
+    accumulatedDepreciationMinor: sum.accumulatedDepreciationMinor + Number(row.accumulatedDepreciationMinor || 0),
+    wdvMinor: sum.wdvMinor + Number(row.wdvMinor || 0),
+    saleAmountMinor: sum.saleAmountMinor + Number(row.saleAmountMinor || 0)
+  }), { purchaseAmountMinor: 0, accumulatedDepreciationMinor: 0, wdvMinor: 0, saleAmountMinor: 0 });
+  return { asOfDate, rows, totals };
+}
+
+function reportFixedAssetSchedule({ asOfDate = '' } = {}) {
+  if (!asOfDate) throw new Error('Select a date for the fixed asset schedule.');
+  return fixedAssetScheduleRows(asOfDate);
+}
+
 function reportBalanceSheet({ asOfDate = '' } = {}) {
   const financialYearStart = financialYearStartFor(asOfDate);
   const rows = all(`
@@ -1405,6 +1681,7 @@ function getSnapshot() {
     accounts: postingAccounts,
     company: getCompanyMaster(),
     products: listProducts(),
+    fixedAssets: listFixedAssets(),
     hasTransactions: Boolean(one('SELECT 1 AS yes FROM vouchers LIMIT 1')),
     coaRows: listCoaRows(),
     tags: listTags(),
@@ -1468,6 +1745,19 @@ function replaceData(backup) {
       `, [row.id, row.name, row.kind, row.hsn_sac_code, row.gst_rate,
         row.itc_available, row.purchase_account_id, row.sales_account_id,
         row.created_at, row.updated_at]);
+      for (const row of backup.data.fixed_assets || []) exec(`
+        INSERT INTO fixed_assets (
+          id, name, asset_account_id, purchase_voucher_id, purchase_date,
+          purchase_amount_minor, depreciation_method, depreciation_rate,
+          scrap_value_minor, sale_voucher_id, sale_date, sale_amount_minor,
+          created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `, [
+        row.id, row.name, row.asset_account_id, row.purchase_voucher_id,
+        row.purchase_date, row.purchase_amount_minor, row.depreciation_method,
+        row.depreciation_rate, row.scrap_value_minor, row.sale_voucher_id,
+        row.sale_date, row.sale_amount_minor || 0, row.created_at, row.updated_at
+      ]);
       for (const row of backup.data.tags || []) exec('INSERT INTO tags (id, name, color, created_at, updated_at) VALUES (?, ?, ?, ?, ?)', [row.id, row.name, row.color, row.created_at, row.updated_at]);
       for (const row of backup.data.coa_tags || []) exec('INSERT INTO coa_tags (entity_type, entity_id, tag_id) VALUES (?, ?, ?)', [row.entity_type, row.entity_id, row.tag_id]);
       for (const row of backup.data.vouchers || []) exec('INSERT INTO vouchers (id, voucher_no, type, voucher_date, reference_no, invoice_no, invoice_date, narration, party_account_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', [row.id, row.voucher_no, row.type, row.voucher_date, row.reference_no, row.invoice_no, row.invoice_date, row.narration, row.party_account_id, row.created_at, row.updated_at]);
@@ -1510,6 +1800,8 @@ const handlers = {
   reportLedger,
   reportProfitLoss,
   reportTrialBalance,
+  reportFixedAssetRegister,
+  reportFixedAssetSchedule,
   reportBalanceSheet,
   reportTag,
   reportTagTransactions,

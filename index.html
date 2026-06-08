@@ -24,6 +24,7 @@
           <button class="nav-tab active" data-view="dashboard">Dashboard</button>
           <button class="nav-tab" data-view="coa">Chart of Accounts</button>
           <button class="nav-tab" data-view="products">Products / Services</button>
+          <button class="nav-tab" data-view="fixedAssets">Fixed Assets</button>
           <button class="nav-tab" data-view="entries">Entries</button>
           <button class="nav-tab" data-view="reports">Reports</button>
           <button class="nav-tab" data-view="tags">Tags</button>
@@ -255,6 +256,18 @@
           </div>
         </section>
 
+        <section class="view" id="fixedAssetsView">
+          <section class="panel">
+            <div class="panel-heading">
+              <div>
+                <h2>Fixed Assets Register</h2>
+                <p class="muted-text">Assets are created from purchase vouchers marked as fixed assets.</p>
+              </div>
+            </div>
+            <div id="fixedAssetList" class="tag-list"></div>
+          </section>
+        </section>
+
         <section class="view" id="entriesView">
           <section class="panel">
             <div class="panel-heading">
@@ -307,6 +320,18 @@
                   <span id="voucherPartyLabel">Customer / Supplier</span>
                   <select id="voucherParty"></select>
                 </label>
+                <label id="fixedAssetToggleField" class="checkbox-row hidden">
+                  <input id="voucherFixedAsset" type="checkbox">
+                  Fixed Asset purchase / sale
+                </label>
+              </div>
+              <div id="fixedAssetFields" class="form-grid compact nested-fields hidden">
+                <label id="fixedAssetPurchaseNameField">Asset Name<input id="fixedAssetName" autocomplete="off" placeholder="Laptop, Machinery"></label>
+                <label id="fixedAssetAccountField">Fixed Asset Account<select id="fixedAssetAccount"></select></label>
+                <label id="fixedAssetMethodField">Depreciation Method<select id="fixedAssetMethod"><option value="SLM">Straight Line</option><option value="WDV">WDV</option></select></label>
+                <label id="fixedAssetRateField">Depreciation %<input id="fixedAssetRate" type="number" min="0" step="0.01" value="0"></label>
+                <label id="fixedAssetScrapField">Scrap Value<input id="fixedAssetScrap" inputmode="decimal" placeholder="0.00"></label>
+                <label id="fixedAssetSaleField">Asset Sold<select id="fixedAssetSaleSelect"></select></label>
               </div>
 
               <div id="voucherLineEditor" class="table-wrap line-editor">
@@ -376,6 +401,8 @@
               <button class="report-tab" type="button" data-report="purchaseJournal">Purchase Journal</button>
               <button class="report-tab" type="button" data-report="expenseJournal">Expense Journal</button>
               <button class="report-tab" type="button" data-report="incomeJournal">Income Journal</button>
+              <button class="report-tab" type="button" data-report="fixedAssetRegister">Fixed Asset Register</button>
+              <button class="report-tab" type="button" data-report="fixedAssetSchedule">Depreciation Schedule</button>
             </div>
             <form id="reportForm" class="report-toolbar">
               <label id="reportAccountField" class="hidden">

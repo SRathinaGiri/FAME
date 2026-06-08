@@ -61,6 +61,7 @@ const state = {
   subheads: [],
   accounts: [],
   products: [],
+  fixedAssets: [],
   hasTransactions: false,
   coaRows: [],
   tags: [],
@@ -163,6 +164,7 @@ const els = {
   productSalesAccount: document.querySelector('#productSalesAccount'),
   deleteProduct: document.querySelector('#deleteProduct'),
   clearProduct: document.querySelector('#clearProduct'),
+  fixedAssetList: document.querySelector('#fixedAssetList'),
   voucherForm: document.querySelector('#voucherForm'),
   voucherType: document.querySelector('#voucherType'),
   voucherDate: document.querySelector('#voucherDate'),
@@ -175,6 +177,21 @@ const els = {
   voucherPartyField: document.querySelector('#voucherPartyField'),
   voucherPartyLabel: document.querySelector('#voucherPartyLabel'),
   voucherParty: document.querySelector('#voucherParty'),
+  fixedAssetToggleField: document.querySelector('#fixedAssetToggleField'),
+  voucherFixedAsset: document.querySelector('#voucherFixedAsset'),
+  fixedAssetFields: document.querySelector('#fixedAssetFields'),
+  fixedAssetPurchaseNameField: document.querySelector('#fixedAssetPurchaseNameField'),
+  fixedAssetAccountField: document.querySelector('#fixedAssetAccountField'),
+  fixedAssetMethodField: document.querySelector('#fixedAssetMethodField'),
+  fixedAssetRateField: document.querySelector('#fixedAssetRateField'),
+  fixedAssetScrapField: document.querySelector('#fixedAssetScrapField'),
+  fixedAssetSaleField: document.querySelector('#fixedAssetSaleField'),
+  fixedAssetName: document.querySelector('#fixedAssetName'),
+  fixedAssetAccount: document.querySelector('#fixedAssetAccount'),
+  fixedAssetMethod: document.querySelector('#fixedAssetMethod'),
+  fixedAssetRate: document.querySelector('#fixedAssetRate'),
+  fixedAssetScrap: document.querySelector('#fixedAssetScrap'),
+  fixedAssetSaleSelect: document.querySelector('#fixedAssetSaleSelect'),
   voucherLineEditor: document.querySelector('#voucherLineEditor'),
   voucherLines: document.querySelector('#voucherLines'),
   invoiceItemEditor: document.querySelector('#invoiceItemEditor'),
@@ -568,6 +585,21 @@ function renderProductMaster() {
     });
   });
   if (!els.productId.value) els.deleteProduct.disabled = true;
+}
+
+function fixedAssetAccounts() {
+  return state.accounts.filter((account) => account.headCode === '104000' && account.code !== '104901' && !account.isSystem);
+}
+
+function renderFixedAssetModule() {
+  els.fixedAssetList.innerHTML = state.fixedAssets.length
+    ? state.fixedAssets.map((asset) => `
+        <div class="product-row">
+          <strong>${escapeHtml(asset.name)}</strong>
+          <span>${escapeHtml(asset.assetAccountCode)} - ${escapeHtml(asset.assetAccountName)} | ${asset.depreciationMethod} ${asset.depreciationRate}% | Cost ${minorToMoney(asset.purchaseAmountMinor)} | Scrap ${minorToMoney(asset.scrapValueMinor)}${asset.saleDate ? ` | Sold ${formatDate(asset.saleDate)}` : ''}</span>
+        </div>
+      `).join('')
+    : '<div class="empty-list">No fixed assets recorded yet. Mark a purchase voucher as Fixed Asset to create one.</div>';
 }
 
 function renderTree() {
@@ -1009,6 +1041,103 @@ function renderTrialBalance(data) {
   bindReportLinks(els.reportContent);
 }
 
+function renderFixedAssetRegister(data) {
+  els.reportTitle.textContent = 'Fixed Asset Register';
+  els.reportMeta.textContent = `As at ${formatDate(els.reportAsOfDate.value)}`;
+  reportKpis([
+    { label: 'Cost', value: minorToMoney(data.totals.purchaseAmountMinor) },
+    { label: 'Accum. Depn.', value: minorToMoney(data.totals.accumulatedDepreciationMinor) },
+    { label: 'WDV', value: minorToMoney(data.totals.wdvMinor) },
+    { label: 'Sale Value', value: minorToMoney(data.totals.saleAmountMinor) }
+  ]);
+  const headers = [
+    { label: 'Sl.No.', amount: true }, { label: 'Asset' }, { label: 'Asset Account' },
+    { label: 'Purchase Date' }, { label: 'Purchase Voucher' }, { label: 'Method' },
+    { label: 'Rate %', amount: true }, { label: 'Cost', amount: true },
+    { label: 'Scrap Value', amount: true }, { label: 'Accum. Depn.', amount: true },
+    { label: 'WDV', amount: true }, { label: 'Status' }
+  ];
+  const body = data.rows.length
+    ? data.rows.map((row) => `
+        <tr>
+          <td class="amount">${row.slNo}</td>
+          <td>${escapeHtml(row.name)}</td>
+          <td>${escapeHtml(`${row.assetAccountCode} - ${row.assetAccountName}`)}</td>
+          <td>${formatDate(row.purchaseDate)}</td>
+          <td>${row.purchaseVoucherId ? voucherButton({ voucherId: row.purchaseVoucherId, voucherNo: row.purchaseVoucherNo }) : ''}</td>
+          <td>${escapeHtml(row.depreciationMethod)}</td>
+          <td class="amount">${escapeHtml(row.depreciationRate)}</td>
+          <td class="amount">${minorToMoney(row.purchaseAmountMinor)}</td>
+          <td class="amount">${minorToMoney(row.scrapValueMinor)}</td>
+          <td class="amount">${minorToMoney(row.accumulatedDepreciationMinor)}</td>
+          <td class="amount">${minorToMoney(row.wdvMinor)}</td>
+          <td>${escapeHtml(row.status)}</td>
+        </tr>
+      `).join('')
+    : '<tr><td colspan="12" class="empty">No fixed assets recorded.</td></tr>';
+  els.reportContent.innerHTML = reportTable(headers, body);
+  state.reportExport = {
+    title: els.reportTitle.textContent,
+    meta: els.reportMeta.textContent,
+    headers: headers.map((header) => header.label),
+    rows: data.rows.map((row) => [
+      row.slNo, row.name, `${row.assetAccountCode} - ${row.assetAccountName}`,
+      formatDate(row.purchaseDate), row.purchaseVoucherNo || '', row.depreciationMethod,
+      Number(row.depreciationRate || 0), minorToNumber(row.purchaseAmountMinor),
+      minorToNumber(row.scrapValueMinor), minorToNumber(row.accumulatedDepreciationMinor),
+      minorToNumber(row.wdvMinor), row.status
+    ])
+  };
+  bindReportLinks(els.reportContent);
+}
+
+function renderFixedAssetSchedule(data) {
+  els.reportTitle.textContent = 'Fixed Asset Depreciation Schedule';
+  els.reportMeta.textContent = `${formatDate(data.financialYearStart)} to ${formatDate(data.financialYearEnd)}`;
+  reportKpis([
+    { label: 'Opening WDV', value: minorToMoney(data.totals.openingWdvMinor) },
+    { label: 'Additions', value: minorToMoney(data.totals.additionMinor) },
+    { label: 'Depreciation', value: minorToMoney(data.totals.depreciationMinor) },
+    { label: 'Closing WDV', value: minorToMoney(data.totals.closingWdvMinor) }
+  ]);
+  const headers = [
+    { label: 'Asset' }, { label: 'Method' }, { label: 'Rate %', amount: true },
+    { label: 'Opening WDV', amount: true }, { label: 'Additions', amount: true },
+    { label: 'Sale Value', amount: true }, { label: 'Depn. Days', amount: true },
+    { label: 'CY Depn.', amount: true }, { label: 'Accum. Depn.', amount: true },
+    { label: 'Closing WDV', amount: true }
+  ];
+  const body = data.rows.length
+    ? data.rows.map((row) => `
+        <tr>
+          <td>${escapeHtml(row.name)}</td>
+          <td>${escapeHtml(row.depreciationMethod)}</td>
+          <td class="amount">${escapeHtml(row.depreciationRate)}</td>
+          <td class="amount">${minorToMoney(row.openingWdvMinor)}</td>
+          <td class="amount">${minorToMoney(row.additionMinor)}</td>
+          <td class="amount">${minorToMoney(row.disposalMinor)}</td>
+          <td class="amount">${row.depreciationDays}</td>
+          <td class="amount">${minorToMoney(row.depreciationMinor)}</td>
+          <td class="amount">${minorToMoney(row.accumulatedDepreciationMinor)}</td>
+          <td class="amount">${minorToMoney(row.closingWdvMinor)}</td>
+        </tr>
+      `).join('')
+    : '<tr><td colspan="10" class="empty">No fixed assets recorded.</td></tr>';
+  els.reportContent.innerHTML = reportTable(headers, body);
+  state.reportExport = {
+    title: els.reportTitle.textContent,
+    meta: els.reportMeta.textContent,
+    headers: headers.map((header) => header.label),
+    rows: data.rows.map((row) => [
+      row.name, row.depreciationMethod, Number(row.depreciationRate || 0),
+      minorToNumber(row.openingWdvMinor), minorToNumber(row.additionMinor),
+      minorToNumber(row.disposalMinor), row.depreciationDays,
+      minorToNumber(row.depreciationMinor), minorToNumber(row.accumulatedDepreciationMinor),
+      minorToNumber(row.closingWdvMinor)
+    ])
+  };
+}
+
 function renderBalanceSheet(data) {
   const assets = statementSection('Assets', data.rows.filter((row) => row.typeId === 'asset'));
   const liabilities = statementSection('Liabilities', data.rows.filter((row) => row.typeId === 'liability'));
@@ -1123,6 +1252,10 @@ async function runReport() {
     renderProfitLoss(await dbCall('reportProfitLoss', { fromDate: els.reportFromDate.value, toDate: els.reportToDate.value }));
   } else if (state.activeReport === 'trialBalance') {
     renderTrialBalance(await dbCall('reportTrialBalance', { asOfDate: els.reportAsOfDate.value }));
+  } else if (state.activeReport === 'fixedAssetRegister') {
+    renderFixedAssetRegister(await dbCall('reportFixedAssetRegister', { asOfDate: els.reportAsOfDate.value }));
+  } else if (state.activeReport === 'fixedAssetSchedule') {
+    renderFixedAssetSchedule(await dbCall('reportFixedAssetSchedule', { asOfDate: els.reportAsOfDate.value }));
   } else if (state.activeReport === 'tag') {
     if (!els.reportTag.value) {
       els.reportTitle.textContent = 'Tag Report';
@@ -1147,7 +1280,7 @@ function setReportType(type, run = true) {
   state.activeReport = type;
   els.reportTabs.forEach((tab) => tab.classList.toggle('active', tab.dataset.report === type));
   const isLedger = type === 'ledger';
-  const isAsOfReport = type === 'balanceSheet' || type === 'trialBalance';
+  const isAsOfReport = ['balanceSheet', 'trialBalance', 'fixedAssetRegister', 'fixedAssetSchedule'].includes(type);
   const isTag = type === 'tag';
   const isTaxJournal = ['salesJournal', 'purchaseJournal', 'expenseJournal', 'incomeJournal'].includes(type);
   els.reportAccountField.classList.toggle('hidden', !isLedger);
@@ -1161,7 +1294,7 @@ function setReportType(type, run = true) {
 }
 
 async function openAccountDrilldown(accountId) {
-  const isAsOfReport = state.activeReport === 'balanceSheet' || state.activeReport === 'trialBalance';
+  const isAsOfReport = ['balanceSheet', 'trialBalance', 'fixedAssetRegister', 'fixedAssetSchedule'].includes(state.activeReport);
   const fromDate = isAsOfReport ? '' : els.reportFromDate.value;
   const toDate = isAsOfReport ? els.reportAsOfDate.value : els.reportToDate.value;
   const data = state.activeReport === 'tag'
@@ -1276,13 +1409,35 @@ function isOutwardInvoiceType(type = els.voucherType.value) {
 function renderVoucherMode() {
   const invoice = isInvoiceType();
   const gstEnabled = Boolean(state.company.gstEnabled);
+  const fixedAssetEligible = ['purchase', 'sales'].includes(els.voucherType.value);
+  const fixedAssetEnabled = fixedAssetEligible && els.voucherFixedAsset.checked;
+  const fixedAssetPurchase = fixedAssetEnabled && els.voucherType.value === 'purchase';
+  const fixedAssetSale = fixedAssetEnabled && els.voucherType.value === 'sales';
   els.voucherLineEditor.classList.toggle('hidden', invoice);
   els.invoiceItemEditor.classList.toggle('hidden', !invoice);
   els.voucherPartyField.classList.toggle('hidden', !invoice);
+  els.fixedAssetToggleField.classList.toggle('hidden', !fixedAssetEligible);
+  els.fixedAssetFields.classList.toggle('hidden', !fixedAssetEnabled);
+  els.fixedAssetPurchaseNameField.classList.toggle('hidden', !fixedAssetPurchase);
+  els.fixedAssetAccountField.classList.toggle('hidden', !fixedAssetPurchase);
+  els.fixedAssetMethodField.classList.toggle('hidden', !fixedAssetPurchase);
+  els.fixedAssetRateField.classList.toggle('hidden', !fixedAssetPurchase);
+  els.fixedAssetScrapField.classList.toggle('hidden', !fixedAssetPurchase);
+  els.fixedAssetSaleField.classList.toggle('hidden', !fixedAssetSale);
   els.addLine.classList.toggle('hidden', invoice);
   els.addInvoiceItem.classList.toggle('hidden', !invoice);
   els.voucherPartyLabel.textContent = isOutwardInvoiceType() ? 'Customer' : 'Supplier';
   document.querySelectorAll('.invoice-gst-column').forEach((element) => element.classList.toggle('hidden', !gstEnabled));
+  const selectedAssetAccount = els.fixedAssetAccount.value;
+  renderOptions(els.fixedAssetAccount, fixedAssetAccounts(), { label: accountLabel, empty: 'Select fixed asset account' });
+  if (fixedAssetAccounts().some((account) => account.id === selectedAssetAccount)) els.fixedAssetAccount.value = selectedAssetAccount;
+  const selectedSoldAsset = els.fixedAssetSaleSelect.value;
+  const saleAssets = state.fixedAssets.filter((asset) => !asset.saleDate);
+  renderOptions(els.fixedAssetSaleSelect, saleAssets, {
+    label: (asset) => `${asset.name} | ${asset.assetAccountCode} - ${asset.assetAccountName}`,
+    empty: 'Select asset sold'
+  });
+  if (saleAssets.some((asset) => asset.id === selectedSoldAsset)) els.fixedAssetSaleSelect.value = selectedSoldAsset;
   if (invoice) {
     const selectedParty = els.voucherParty.value;
     const partyHeadCode = isOutwardInvoiceType() ? '102000' : '201000';
@@ -1381,6 +1536,25 @@ function getInvoiceItems() {
   }));
 }
 
+function getFixedAssetPayload() {
+  const enabled = ['purchase', 'sales'].includes(els.voucherType.value) && els.voucherFixedAsset.checked;
+  if (!enabled) return { enabled: false };
+  if (els.voucherType.value === 'purchase') {
+    return {
+      enabled: true,
+      name: els.fixedAssetName.value.trim(),
+      assetAccountId: els.fixedAssetAccount.value,
+      depreciationMethod: els.fixedAssetMethod.value,
+      depreciationRate: Number(els.fixedAssetRate.value || 0),
+      scrapValueMinor: moneyToMinor(els.fixedAssetScrap.value)
+    };
+  }
+  return {
+    enabled: true,
+    assetId: els.fixedAssetSaleSelect.value
+  };
+}
+
 function updateInvoiceTotals() {
   [...els.invoiceItems.querySelectorAll('tr')].forEach(calculateInvoiceItemRow);
   const items = getInvoiceItems();
@@ -1469,6 +1643,9 @@ function resetVoucherForm() {
   els.voucherForm.reset();
   els.voucherEditSelect.value = '';
   els.voucherDate.value = todayIso();
+  els.voucherFixedAsset.checked = false;
+  els.fixedAssetScrap.value = '';
+  els.fixedAssetRate.value = '0';
   renderTagOptions(els.voucherTags);
   resetVoucherLinesForType();
 }
@@ -1483,6 +1660,13 @@ function fillVoucherForm(voucherId) {
   els.invoiceNo.value = voucher.invoiceNo || '';
   els.invoiceDate.value = voucher.invoiceDate || '';
   els.narration.value = voucher.narration || '';
+  els.voucherFixedAsset.checked = Boolean(voucher.fixedAsset);
+  els.fixedAssetName.value = voucher.fixedAsset?.name || '';
+  els.fixedAssetAccount.value = voucher.fixedAsset?.assetAccountId || '';
+  els.fixedAssetMethod.value = voucher.fixedAsset?.depreciationMethod || 'SLM';
+  els.fixedAssetRate.value = voucher.fixedAsset?.depreciationRate || '0';
+  els.fixedAssetScrap.value = voucher.fixedAsset?.scrapValueMinor ? minorToMoney(voucher.fixedAsset.scrapValueMinor) : '';
+  els.fixedAssetSaleSelect.value = voucher.fixedAsset?.id || '';
   renderTagOptions(els.voucherTags, state.voucherTags[voucher.id] || []);
   els.voucherLines.innerHTML = '';
   els.invoiceItems.innerHTML = '';
@@ -1536,6 +1720,7 @@ async function refreshSnapshot() {
     subheads: snapshot.subheads || [],
     accounts: snapshot.accounts || [],
     products: snapshot.products || [],
+    fixedAssets: snapshot.fixedAssets || [],
     hasTransactions: Boolean(snapshot.hasTransactions),
     coaRows: snapshot.coaRows || [],
     tags: snapshot.tags || [],
@@ -1553,6 +1738,7 @@ async function refreshSnapshot() {
   renderDashboard();
   renderCompanyMaster();
   renderProductMaster();
+  renderFixedAssetModule();
   if (!state.reportDatesInitialized) {
     els.reportFromDate.value = financialYearStartIso(state.company.financialYearStart);
     state.reportDatesInitialized = true;
@@ -1693,6 +1879,9 @@ function bindEvents() {
 
   els.voucherType.addEventListener('change', resetVoucherLinesForType);
   els.voucherParty.addEventListener('change', updateInvoiceTotals);
+  els.voucherFixedAsset.addEventListener('change', renderVoucherMode);
+  els.fixedAssetAccount.addEventListener('change', updateInvoiceTotals);
+  els.fixedAssetSaleSelect.addEventListener('change', updateInvoiceTotals);
   els.addLine.addEventListener('click', () => addVoucherLine(addedLineDefaultForType(els.voucherType.value)));
   els.addInvoiceItem.addEventListener('click', () => addInvoiceItem());
   els.clearVoucher.addEventListener('click', resetVoucherForm);
@@ -1717,7 +1906,8 @@ function bindEvents() {
       partyAccountId: isInvoiceType() ? els.voucherParty.value : null,
       tagIds: selectedValues(els.voucherTags),
       lines: isInvoiceType() ? [] : getVoucherLines().filter((line) => line.accountId && (line.debitMinor || line.creditMinor)),
-      items: isInvoiceType() ? getInvoiceItems() : []
+      items: isInvoiceType() ? getInvoiceItems() : [],
+      fixedAsset: getFixedAssetPayload()
     });
     await refreshSnapshot();
     resetVoucherForm();
