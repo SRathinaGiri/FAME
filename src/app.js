@@ -921,6 +921,94 @@ function renderProfitLoss(data) {
   bindReportLinks(els.reportContent);
 }
 
+function renderTrialBalance(data) {
+  els.reportTitle.textContent = 'Trial Balance';
+  els.reportMeta.textContent = `As at ${formatDate(els.reportAsOfDate.value)} | FY from ${formatDate(data.financialYearStart)}`;
+  reportKpis([
+    { label: 'Opening Debit', value: minorToMoney(data.totals.openingDebitMinor) },
+    { label: 'Opening Credit', value: minorToMoney(data.totals.openingCreditMinor) },
+    { label: 'CY Debit', value: minorToMoney(data.totals.cyDebitMinor) },
+    { label: 'CY Credit', value: minorToMoney(data.totals.cyCreditMinor) },
+    { label: 'Closing Debit', value: minorToMoney(data.totals.closingDebitMinor) },
+    { label: 'Closing Credit', value: minorToMoney(data.totals.closingCreditMinor) }
+  ]);
+  const body = data.rows.length
+    ? data.rows.map((row) => `
+        <tr>
+          <td class="amount">${row.slNo}</td>
+          <td>${accountButton(row)}</td>
+          <td>${escapeHtml(`${row.subheadCode} - ${row.subheadName}`)}</td>
+          <td>${escapeHtml(`${row.headCode} - ${row.headName}`)}</td>
+          <td>${escapeHtml(row.typeName)}</td>
+          <td class="amount">${row.openingDebitMinor ? minorToMoney(row.openingDebitMinor) : ''}</td>
+          <td class="amount">${row.openingCreditMinor ? minorToMoney(row.openingCreditMinor) : ''}</td>
+          <td class="amount">${row.cyDebitMinor ? minorToMoney(row.cyDebitMinor) : ''}</td>
+          <td class="amount">${row.cyCreditMinor ? minorToMoney(row.cyCreditMinor) : ''}</td>
+          <td class="amount">${row.closingDebitMinor ? minorToMoney(row.closingDebitMinor) : ''}</td>
+          <td class="amount">${row.closingCreditMinor ? minorToMoney(row.closingCreditMinor) : ''}</td>
+        </tr>
+      `).join('') + `
+        <tr class="report-total-row">
+          <td colspan="5">Total</td>
+          <td class="amount">${minorToMoney(data.totals.openingDebitMinor)}</td>
+          <td class="amount">${minorToMoney(data.totals.openingCreditMinor)}</td>
+          <td class="amount">${minorToMoney(data.totals.cyDebitMinor)}</td>
+          <td class="amount">${minorToMoney(data.totals.cyCreditMinor)}</td>
+          <td class="amount">${minorToMoney(data.totals.closingDebitMinor)}</td>
+          <td class="amount">${minorToMoney(data.totals.closingCreditMinor)}</td>
+        </tr>
+      `
+    : '<tr><td colspan="11" class="empty">No accounts available.</td></tr>';
+  const headers = [
+    { label: 'Sl.No.', amount: true },
+    { label: 'Name of the Account' },
+    { label: 'Sub-Header' },
+    { label: 'Header' },
+    { label: 'Account Type' },
+    { label: 'OpBalDebit', amount: true },
+    { label: 'OpBalCredit', amount: true },
+    { label: 'CYDebit', amount: true },
+    { label: 'CYCredit', amount: true },
+    { label: 'ClBalDebit', amount: true },
+    { label: 'ClBalCredit', amount: true }
+  ];
+  els.reportContent.innerHTML = reportTable(headers, body);
+  state.reportExport = {
+    title: els.reportTitle.textContent,
+    meta: els.reportMeta.textContent,
+    headers: headers.map((header) => header.label),
+    rows: [
+      ...data.rows.map((row) => [
+        row.slNo,
+        `${row.accountCode} - ${row.accountName}`,
+        `${row.subheadCode} - ${row.subheadName}`,
+        `${row.headCode} - ${row.headName}`,
+        row.typeName,
+        minorToNumber(row.openingDebitMinor),
+        minorToNumber(row.openingCreditMinor),
+        minorToNumber(row.cyDebitMinor),
+        minorToNumber(row.cyCreditMinor),
+        minorToNumber(row.closingDebitMinor),
+        minorToNumber(row.closingCreditMinor)
+      ]),
+      [
+        'Total',
+        '',
+        '',
+        '',
+        '',
+        minorToNumber(data.totals.openingDebitMinor),
+        minorToNumber(data.totals.openingCreditMinor),
+        minorToNumber(data.totals.cyDebitMinor),
+        minorToNumber(data.totals.cyCreditMinor),
+        minorToNumber(data.totals.closingDebitMinor),
+        minorToNumber(data.totals.closingCreditMinor)
+      ]
+    ]
+  };
+  bindReportLinks(els.reportContent);
+}
+
 function renderBalanceSheet(data) {
   const assets = statementSection('Assets', data.rows.filter((row) => row.typeId === 'asset'));
   const liabilities = statementSection('Liabilities', data.rows.filter((row) => row.typeId === 'liability'));
@@ -1033,6 +1121,8 @@ async function runReport() {
     }));
   } else if (state.activeReport === 'profitLoss') {
     renderProfitLoss(await dbCall('reportProfitLoss', { fromDate: els.reportFromDate.value, toDate: els.reportToDate.value }));
+  } else if (state.activeReport === 'trialBalance') {
+    renderTrialBalance(await dbCall('reportTrialBalance', { asOfDate: els.reportAsOfDate.value }));
   } else if (state.activeReport === 'tag') {
     if (!els.reportTag.value) {
       els.reportTitle.textContent = 'Tag Report';
@@ -1057,23 +1147,23 @@ function setReportType(type, run = true) {
   state.activeReport = type;
   els.reportTabs.forEach((tab) => tab.classList.toggle('active', tab.dataset.report === type));
   const isLedger = type === 'ledger';
-  const isBalanceSheet = type === 'balanceSheet';
+  const isAsOfReport = type === 'balanceSheet' || type === 'trialBalance';
   const isTag = type === 'tag';
   const isTaxJournal = ['salesJournal', 'purchaseJournal', 'expenseJournal', 'incomeJournal'].includes(type);
   els.reportAccountField.classList.toggle('hidden', !isLedger);
   els.reportTagField.classList.toggle('hidden', !isTag);
   els.reportTagModeField.classList.toggle('hidden', !isTag);
-  els.reportFromField.classList.toggle('hidden', isBalanceSheet);
-  els.reportToField.classList.toggle('hidden', isBalanceSheet);
-  els.reportAsOfField.classList.toggle('hidden', !isBalanceSheet);
+  els.reportFromField.classList.toggle('hidden', isAsOfReport);
+  els.reportToField.classList.toggle('hidden', isAsOfReport);
+  els.reportAsOfField.classList.toggle('hidden', !isAsOfReport);
   if (isTaxJournal) els.reportSummary.innerHTML = '';
   if (run) runReport().catch((error) => showToast(error.message));
 }
 
 async function openAccountDrilldown(accountId) {
-  const isBalanceSheet = state.activeReport === 'balanceSheet';
-  const fromDate = isBalanceSheet ? '' : els.reportFromDate.value;
-  const toDate = isBalanceSheet ? els.reportAsOfDate.value : els.reportToDate.value;
+  const isAsOfReport = state.activeReport === 'balanceSheet' || state.activeReport === 'trialBalance';
+  const fromDate = isAsOfReport ? '' : els.reportFromDate.value;
+  const toDate = isAsOfReport ? els.reportAsOfDate.value : els.reportToDate.value;
   const data = state.activeReport === 'tag'
     ? await dbCall('reportTagTransactions', {
         tagId: els.reportTag.value,

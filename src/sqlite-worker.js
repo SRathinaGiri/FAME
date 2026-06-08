@@ -1163,6 +1163,75 @@ function reportProfitLoss({ fromDate = '', toDate = '' } = {}) {
   return { rows, incomeMinor, expenseMinor, profitMinor: incomeMinor - expenseMinor };
 }
 
+function reportTrialBalance({ asOfDate = '' } = {}) {
+  if (!asOfDate) throw new Error('Select an as-at date for the trial balance.');
+  const financialYearStart = financialYearStartFor(asOfDate);
+  const accumulatedProfitMinor = profitLossBefore(financialYearStart);
+  const rows = all(`
+    SELECT a.id AS accountId, a.code AS accountCode, a.name AS accountName,
+           s.id AS subheadId, s.code AS subheadCode, s.name AS subheadName,
+           h.id AS headId, h.code AS headCode, h.name AS headName,
+           h.type_id AS typeId, t.name AS typeName,
+           COALESCE(SUM(CASE WHEN v.voucher_date < ? THEN vl.debit_minor ELSE 0 END), 0) AS rawOpeningDebitMinor,
+           COALESCE(SUM(CASE WHEN v.voucher_date < ? THEN vl.credit_minor ELSE 0 END), 0) AS rawOpeningCreditMinor,
+           COALESCE(SUM(CASE WHEN v.voucher_date >= ? AND v.voucher_date <= ? THEN vl.debit_minor ELSE 0 END), 0) AS cyDebitMinor,
+           COALESCE(SUM(CASE WHEN v.voucher_date >= ? AND v.voucher_date <= ? THEN vl.credit_minor ELSE 0 END), 0) AS cyCreditMinor
+    FROM accounts a
+    JOIN subhead_accounts s ON s.id = a.subhead_id
+    JOIN head_accounts h ON h.id = s.head_id
+    JOIN account_types t ON t.id = h.type_id
+    LEFT JOIN voucher_lines vl ON vl.account_id = a.id
+    LEFT JOIN vouchers v ON v.id = vl.voucher_id AND v.voucher_date <= ?
+    GROUP BY a.id
+    ORDER BY t.base_code, h.code, s.code, a.code
+  `, [financialYearStart, financialYearStart, financialYearStart, asOfDate, financialYearStart, asOfDate, asOfDate]).map((row, index) => {
+    let openingBalanceMinor = ['income', 'expense'].includes(row.typeId)
+      ? 0
+      : Number(row.rawOpeningDebitMinor || 0) - Number(row.rawOpeningCreditMinor || 0);
+    if (row.accountCode === '302101') openingBalanceMinor -= accumulatedProfitMinor;
+    const cyDebitMinor = Number(row.cyDebitMinor || 0);
+    const cyCreditMinor = Number(row.cyCreditMinor || 0);
+    const closingBalanceMinor = openingBalanceMinor + cyDebitMinor - cyCreditMinor;
+    return {
+      slNo: index + 1,
+      accountId: row.accountId,
+      accountCode: row.accountCode,
+      accountName: row.accountName,
+      subheadCode: row.subheadCode,
+      subheadName: row.subheadName,
+      headCode: row.headCode,
+      headName: row.headName,
+      typeId: row.typeId,
+      typeName: row.typeName,
+      openingDebitMinor: openingBalanceMinor > 0 ? openingBalanceMinor : 0,
+      openingCreditMinor: openingBalanceMinor < 0 ? Math.abs(openingBalanceMinor) : 0,
+      cyDebitMinor,
+      cyCreditMinor,
+      closingDebitMinor: closingBalanceMinor > 0 ? closingBalanceMinor : 0,
+      closingCreditMinor: closingBalanceMinor < 0 ? Math.abs(closingBalanceMinor) : 0
+    };
+  });
+  const totals = rows.reduce(
+    (sum, row) => ({
+      openingDebitMinor: sum.openingDebitMinor + row.openingDebitMinor,
+      openingCreditMinor: sum.openingCreditMinor + row.openingCreditMinor,
+      cyDebitMinor: sum.cyDebitMinor + row.cyDebitMinor,
+      cyCreditMinor: sum.cyCreditMinor + row.cyCreditMinor,
+      closingDebitMinor: sum.closingDebitMinor + row.closingDebitMinor,
+      closingCreditMinor: sum.closingCreditMinor + row.closingCreditMinor
+    }),
+    {
+      openingDebitMinor: 0,
+      openingCreditMinor: 0,
+      cyDebitMinor: 0,
+      cyCreditMinor: 0,
+      closingDebitMinor: 0,
+      closingCreditMinor: 0
+    }
+  );
+  return { asOfDate, financialYearStart, rows, totals };
+}
+
 function reportBalanceSheet({ asOfDate = '' } = {}) {
   const financialYearStart = financialYearStartFor(asOfDate);
   const rows = all(`
@@ -1440,6 +1509,7 @@ const handlers = {
   reportTaxJournal,
   reportLedger,
   reportProfitLoss,
+  reportTrialBalance,
   reportBalanceSheet,
   reportTag,
   reportTagTransactions,
