@@ -1775,6 +1775,16 @@ function downloadJson(filename, data) {
   URL.revokeObjectURL(url);
 }
 
+async function parseBackupFile(file, password) {
+  const parsed = JSON.parse(await file.text());
+  if (parsed?.format === 'fame.encrypted.backup') {
+    if (!password) throw new Error('Enter the backup password.');
+    return decryptBackup(parsed, password);
+  }
+  if (parsed?.app === 'F.A.M.E') return parsed;
+  throw new Error('This is not a valid F.A.M.E backup file.');
+}
+
 async function createNewCompany() {
   const backupRequired = window.confirm(
     'Do you need a backup of the existing data before creating a new company? Press OK to open Backup, or Cancel to continue without backup.'
@@ -1987,7 +1997,7 @@ function bindEvents() {
   });
   els.importForm.addEventListener('submit', async (event) => {
     event.preventDefault();
-    await dbCall('importData', await decryptBackup(JSON.parse(await els.importFile.files[0].text()), els.importPassword.value));
+    await dbCall('importData', await parseBackupFile(els.importFile.files[0], els.importPassword.value));
     els.importForm.reset();
     await refreshSnapshot();
     showToast('Backup imported.');

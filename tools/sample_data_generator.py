@@ -332,7 +332,7 @@ class Generator:
         ], narration="Opening capital introduced")
 
     def tax_split(self, taxable: int, rate: float, party_state: str) -> tuple[int, int, int, int]:
-        tax = self.money((taxable / 100) * rate / 100) if False else int(round(taxable * rate / 100))
+        tax = int(round(taxable * rate / 100))
         if not self.config.gst_enabled:
             return 0, 0, 0, taxable
         if party_state == "TN":
@@ -343,6 +343,9 @@ class Generator:
 
     def add_voucher(self, voucher_type: str, value: date, lines: list[tuple[str, str, int, int]], *,
                     party_id=None, invoice_no=None, narration=None) -> dict:
+        lines = [(account_id, description, debit, credit) for account_id, description, debit, credit in lines if debit or credit]
+        if len(lines) < 2:
+            raise ValueError(f"{voucher_type} voucher on {value} has fewer than two non-zero lines.")
         voucher_id = self.uid()
         self.data["vouchers"].append({
             "id": voucher_id,
