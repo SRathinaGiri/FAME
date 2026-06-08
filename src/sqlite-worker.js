@@ -1,8 +1,8 @@
 import sqlite3InitModule from './vendor/sqlite/index.mjs';
 
-const SCHEMA_VERSION = 8;
-const DB_FILE = '/fame-v8.sqlite3';
-const IDB_NAME = 'fame-sqlite-fallback-v8';
+const SCHEMA_VERSION = 9;
+const DB_FILE = '/fame-v9.sqlite3';
+const IDB_NAME = 'fame-sqlite-fallback-v9';
 const IDB_STORE = 'snapshots';
 const IDB_KEY = 'latest';
 const TABLES = [
@@ -308,6 +308,20 @@ function seedDatabase() {
       exec('INSERT INTO accounts (id, code, name, subhead_id) VALUES (?, ?, ?, ?)', [crypto.randomUUID(), code, name, subhead.id]);
     }
   });
+}
+
+async function resetCompanyData() {
+  exec('PRAGMA foreign_keys = OFF');
+  try {
+    transaction(() => {
+      for (const table of [...TABLES].reverse()) exec(`DELETE FROM ${table}`);
+    });
+  } finally {
+    exec('PRAGMA foreign_keys = ON');
+  }
+  seedDatabase();
+  await persistIfMirrored();
+  return getSnapshot();
 }
 
 async function init() {
@@ -1019,6 +1033,54 @@ function reportDaybook({ fromDate = '', toDate = '' } = {}) {
   return { rows, totals };
 }
 
+function reportTaxJournal({ type, fromDate = '', toDate = '' } = {}) {
+  const labels = {
+    sales: 'Sales Journal',
+    purchase: 'Purchase Journal',
+    expense: 'Expense Journal',
+    income: 'Income Journal'
+  };
+  if (!labels[type]) throw new Error('Select a valid journal report.');
+  const rows = all(`
+    SELECT v.id AS voucherId, v.voucher_no AS voucherNo, v.type,
+           v.voucher_date AS voucherDate, v.invoice_no AS invoiceNo,
+           v.invoice_date AS invoiceDate, v.reference_no AS referenceNo,
+           v.narration, a.id AS partyAccountId, a.code AS partyCode,
+           a.name AS partyName, a.state AS partyState,
+           p.name AS productName, p.kind AS productKind, p.hsn_sac_code AS hsnSacCode,
+           vi.quantity, vi.gst_rate AS gstRate,
+           vi.taxable_minor AS taxableMinor, vi.cgst_minor AS cgstMinor,
+           vi.sgst_minor AS sgstMinor, vi.igst_minor AS igstMinor,
+           vi.total_minor AS totalMinor, vi.sort_order AS sortOrder
+    FROM vouchers v
+    JOIN voucher_items vi ON vi.voucher_id = v.id
+    JOIN products p ON p.id = vi.product_id
+    LEFT JOIN accounts a ON a.id = v.party_account_id
+    WHERE v.type = ?
+      AND (? = '' OR v.voucher_date >= ?)
+      AND (? = '' OR v.voucher_date <= ?)
+    ORDER BY v.voucher_date, v.voucher_no, vi.sort_order
+  `, [type, fromDate, fromDate, toDate, toDate]).map((row) => ({
+    ...row,
+    taxableMinor: Number(row.taxableMinor || 0),
+    cgstMinor: Number(row.cgstMinor || 0),
+    sgstMinor: Number(row.sgstMinor || 0),
+    igstMinor: Number(row.igstMinor || 0),
+    totalMinor: Number(row.totalMinor || 0)
+  }));
+  const totals = rows.reduce(
+    (sum, row) => ({
+      taxableMinor: sum.taxableMinor + row.taxableMinor,
+      cgstMinor: sum.cgstMinor + row.cgstMinor,
+      sgstMinor: sum.sgstMinor + row.sgstMinor,
+      igstMinor: sum.igstMinor + row.igstMinor,
+      totalMinor: sum.totalMinor + row.totalMinor
+    }),
+    { taxableMinor: 0, cgstMinor: 0, sgstMinor: 0, igstMinor: 0, totalMinor: 0 }
+  );
+  return { type, title: labels[type], rows, totals };
+}
+
 function reportLedger({ accountId, fromDate = '', toDate = '' } = {}) {
   if (!accountId) throw new Error('Select an account for the ledger.');
   const account = one(`
@@ -1370,10 +1432,12 @@ const handlers = {
   setVoucherTags,
   saveVoucher,
   deleteVoucher,
+  resetCompanyData,
   saveCompanyMaster,
   saveProduct,
   deleteProduct,
   reportDaybook,
+  reportTaxJournal,
   reportLedger,
   reportProfitLoss,
   reportBalanceSheet,

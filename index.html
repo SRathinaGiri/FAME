@@ -36,7 +36,7 @@
       <main class="main-panel">
         <header class="topbar">
           <div>
-            <p class="eyebrow">Local-first accounting</p>
+            <p class="eyebrow" id="companyDisplay">Local-first accounting</p>
             <h1 id="viewTitle">Dashboard</h1>
           </div>
           <button id="installButton" class="secondary hidden" type="button">Install App</button>
@@ -371,6 +371,10 @@
               <button class="report-tab" type="button" data-report="profitLoss">Profit and Loss</button>
               <button class="report-tab" type="button" data-report="balanceSheet">Balance Sheet</button>
               <button class="report-tab" type="button" data-report="tag">Tag Report</button>
+              <button class="report-tab" type="button" data-report="salesJournal">Sales Journal</button>
+              <button class="report-tab" type="button" data-report="purchaseJournal">Purchase Journal</button>
+              <button class="report-tab" type="button" data-report="expenseJournal">Expense Journal</button>
+              <button class="report-tab" type="button" data-report="incomeJournal">Income Journal</button>
             </div>
             <form id="reportForm" class="report-toolbar">
               <label id="reportAccountField" class="hidden">
@@ -496,7 +500,10 @@
               </label>
               <p id="gstLockNote" class="field-note hidden">GST setting is locked because transactions exist.</p>
               <p class="field-note full-width">The month and day are reused each year to set the default report From date.</p>
-              <div class="action-row full-width"><button type="submit">Save Configuration</button></div>
+              <div class="action-row full-width">
+                <button type="submit">Save Configuration</button>
+                <button id="newCompany" type="button" class="danger">New Company</button>
+              </div>
             </form>
           </section>
         </section>

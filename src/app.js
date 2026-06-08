@@ -42,6 +42,7 @@ const state = {
 
 const els = {
   storageStatus: document.querySelector('#storageStatus'),
+  companyDisplay: document.querySelector('#companyDisplay'),
   viewTitle: document.querySelector('#viewTitle'),
   navTabs: document.querySelectorAll('.nav-tab'),
   views: document.querySelectorAll('.view'),
@@ -175,6 +176,7 @@ const els = {
   companyRegistration3: document.querySelector('#companyRegistration3'),
   companyFinancialYearStart: document.querySelector('#companyFinancialYearStart'),
   companyGstEnabled: document.querySelector('#companyGstEnabled'),
+  newCompany: document.querySelector('#newCompany'),
   gstLockNote: document.querySelector('#gstLockNote'),
   installButton: document.querySelector('#installButton'),
   toast: document.querySelector('#toast')
@@ -217,6 +219,16 @@ function escapeHtml(value) {
     .replaceAll('>', '&gt;')
     .replaceAll('"', '&quot;')
     .replaceAll("'", '&#39;');
+}
+
+function companyDisplayName() {
+  return String(state.company?.name || '').trim() || 'F.A.M.E';
+}
+
+function updateCompanyChrome() {
+  const name = companyDisplayName();
+  els.companyDisplay.textContent = name;
+  document.title = name === 'F.A.M.E' ? 'F.A.M.E' : `${name} - F.A.M.E`;
 }
 
 function dateRangeLabel(fromDate, toDate) {
@@ -655,6 +667,89 @@ function renderDaybook(data) {
   bindReportLinks(els.reportContent);
 }
 
+function renderTaxJournal(data) {
+  els.reportTitle.textContent = data.title;
+  els.reportMeta.textContent = dateRangeLabel(els.reportFromDate.value, els.reportToDate.value);
+  reportKpis([
+    { label: 'Taxable', value: minorToMoney(data.totals.taxableMinor) },
+    { label: 'CGST', value: minorToMoney(data.totals.cgstMinor) },
+    { label: 'SGST', value: minorToMoney(data.totals.sgstMinor) },
+    { label: 'IGST', value: minorToMoney(data.totals.igstMinor) },
+    { label: 'Total', value: minorToMoney(data.totals.totalMinor) }
+  ]);
+  const body = data.rows.length
+    ? data.rows.map((row) => `
+        <tr>
+          <td>${formatDate(row.voucherDate)}</td>
+          <td>${voucherButton(row)}</td>
+          <td>${escapeHtml(row.invoiceNo || row.referenceNo || '')}</td>
+          <td>${escapeHtml(row.partyCode ? `${row.partyCode} - ${row.partyName}` : '')}</td>
+          <td>${escapeHtml(row.partyState || '')}</td>
+          <td>${escapeHtml(row.productName)}</td>
+          <td>${escapeHtml(row.hsnSacCode || '')}</td>
+          <td class="amount">${escapeHtml(row.quantity)}</td>
+          <td class="amount">${escapeHtml(row.gstRate)}%</td>
+          <td class="amount">${minorToMoney(row.taxableMinor)}</td>
+          <td class="amount">${row.cgstMinor ? minorToMoney(row.cgstMinor) : ''}</td>
+          <td class="amount">${row.sgstMinor ? minorToMoney(row.sgstMinor) : ''}</td>
+          <td class="amount">${row.igstMinor ? minorToMoney(row.igstMinor) : ''}</td>
+          <td class="amount">${minorToMoney(row.totalMinor)}</td>
+        </tr>
+      `).join('') + `
+        <tr class="report-total-row">
+          <td colspan="9">Total</td>
+          <td class="amount">${minorToMoney(data.totals.taxableMinor)}</td>
+          <td class="amount">${minorToMoney(data.totals.cgstMinor)}</td>
+          <td class="amount">${minorToMoney(data.totals.sgstMinor)}</td>
+          <td class="amount">${minorToMoney(data.totals.igstMinor)}</td>
+          <td class="amount">${minorToMoney(data.totals.totalMinor)}</td>
+        </tr>
+      `
+    : '<tr><td colspan="14" class="empty">No invoice items in this period.</td></tr>';
+  const headers = [
+    { label: 'Date' },
+    { label: 'Voucher' },
+    { label: 'Invoice / Ref.' },
+    { label: 'Party' },
+    { label: 'State' },
+    { label: 'Product / Service' },
+    { label: 'HSN/SAC' },
+    { label: 'Qty', amount: true },
+    { label: 'GST %', amount: true },
+    { label: 'Taxable', amount: true },
+    { label: 'CGST', amount: true },
+    { label: 'SGST', amount: true },
+    { label: 'IGST', amount: true },
+    { label: 'Total', amount: true }
+  ];
+  els.reportContent.innerHTML = reportTable(headers, body);
+  state.reportExport = {
+    title: data.title,
+    meta: els.reportMeta.textContent,
+    headers: headers.map((header) => header.label),
+    rows: [
+      ...data.rows.map((row) => [
+        formatDate(row.voucherDate),
+        row.voucherNo,
+        row.invoiceNo || row.referenceNo || '',
+        row.partyCode ? `${row.partyCode} - ${row.partyName}` : '',
+        row.partyState || '',
+        row.productName,
+        row.hsnSacCode || '',
+        Number(row.quantity || 0),
+        `${row.gstRate}%`,
+        minorToNumber(row.taxableMinor),
+        minorToNumber(row.cgstMinor),
+        minorToNumber(row.sgstMinor),
+        minorToNumber(row.igstMinor),
+        minorToNumber(row.totalMinor)
+      ]),
+      ['Total', '', '', '', '', '', '', '', '', minorToNumber(data.totals.taxableMinor), minorToNumber(data.totals.cgstMinor), minorToNumber(data.totals.sgstMinor), minorToNumber(data.totals.igstMinor), minorToNumber(data.totals.totalMinor)]
+    ]
+  };
+  bindReportLinks(els.reportContent);
+}
+
 function ledgerTable(data) {
   const openingRow = `
     <tr class="report-group-row">
@@ -863,8 +958,20 @@ function renderTagReport(data) {
 
 async function runReport() {
   els.reportDrilldown.classList.add('hidden');
+  const taxJournalTypes = {
+    salesJournal: 'sales',
+    purchaseJournal: 'purchase',
+    expenseJournal: 'expense',
+    incomeJournal: 'income'
+  };
   if (state.activeReport === 'daybook') {
     renderDaybook(await dbCall('reportDaybook', { fromDate: els.reportFromDate.value, toDate: els.reportToDate.value }));
+  } else if (taxJournalTypes[state.activeReport]) {
+    renderTaxJournal(await dbCall('reportTaxJournal', {
+      type: taxJournalTypes[state.activeReport],
+      fromDate: els.reportFromDate.value,
+      toDate: els.reportToDate.value
+    }));
   } else if (state.activeReport === 'ledger') {
     renderLedger(await dbCall('reportLedger', {
       accountId: els.reportAccount.value,
@@ -899,12 +1006,14 @@ function setReportType(type, run = true) {
   const isLedger = type === 'ledger';
   const isBalanceSheet = type === 'balanceSheet';
   const isTag = type === 'tag';
+  const isTaxJournal = ['salesJournal', 'purchaseJournal', 'expenseJournal', 'incomeJournal'].includes(type);
   els.reportAccountField.classList.toggle('hidden', !isLedger);
   els.reportTagField.classList.toggle('hidden', !isTag);
   els.reportTagModeField.classList.toggle('hidden', !isTag);
   els.reportFromField.classList.toggle('hidden', isBalanceSheet);
   els.reportToField.classList.toggle('hidden', isBalanceSheet);
   els.reportAsOfField.classList.toggle('hidden', !isBalanceSheet);
+  if (isTaxJournal) els.reportSummary.innerHTML = '';
   if (run) runReport().catch((error) => showToast(error.message));
 }
 
@@ -961,6 +1070,7 @@ async function exportCurrentReportExcel() {
  <Worksheet ss:Name="${escapeHtml(report.title.slice(0, 31))}">
   <Table>
    <Row>${cell(report.title, 'Title')}</Row>
+   <Row>${cell(companyDisplayName(), 'Meta')}</Row>
    <Row>${cell(report.meta, 'Meta')}</Row>
    ${headerRow}
    ${bodyRows}
@@ -981,17 +1091,25 @@ async function exportCurrentReportPdf() {
   if (!report) return showToast('Run a report first.');
   const [{ jsPDF }, { default: autoTable }] = await Promise.all([import('jspdf'), import('jspdf-autotable')]);
   const document = new jsPDF({ orientation: report.headers.length > 5 ? 'landscape' : 'portrait', unit: 'pt', format: 'a4' });
-  document.setFontSize(16);
-  document.text(report.title, 40, 40);
-  document.setFontSize(10);
-  document.setTextColor(102, 112, 133);
-  document.text(report.meta, 40, 58);
+  const drawHeader = () => {
+    document.setFontSize(11);
+    document.setTextColor(31, 58, 95);
+    document.text(companyDisplayName(), 40, 30);
+    document.setFontSize(15);
+    document.setTextColor(23, 32, 47);
+    document.text(report.title, 40, 48);
+    document.setFontSize(9);
+    document.setTextColor(102, 112, 133);
+    document.text(report.meta, 40, 63);
+  };
   autoTable(document, {
-    startY: 72,
+    startY: 78,
     head: [report.headers],
     body: report.rows.map((row) => row.map((value) => typeof value === 'number' ? moneyFormatter.format(value) : String(value ?? ''))),
     styles: { fontSize: 8, cellPadding: 4 },
-    headStyles: { fillColor: [31, 58, 95] }
+    headStyles: { fillColor: [31, 58, 95] },
+    margin: { top: 78 },
+    didDrawPage: drawHeader
   });
   document.save(`${safeFilename(report.title)}-${todayIso()}.pdf`);
 }
@@ -1286,6 +1404,7 @@ async function refreshSnapshot() {
     company: snapshot.company || {}
   });
   els.storageStatus.textContent = `${snapshot.meta.persistence} | SQLite ${snapshot.meta.sqliteVersion}`;
+  updateCompanyChrome();
   renderCoaMasters();
   renderTree();
   renderDashboard();
@@ -1325,6 +1444,27 @@ function downloadJson(filename, data) {
   link.download = filename;
   link.click();
   URL.revokeObjectURL(url);
+}
+
+async function createNewCompany() {
+  const backupRequired = window.confirm(
+    'Do you need a backup of the existing data before creating a new company? Press OK to open Backup, or Cancel to continue without backup.'
+  );
+  if (backupRequired) {
+    switchView('backup');
+    showToast('Export a backup before creating a new company.');
+    return;
+  }
+  const confirmed = window.confirm(
+    'This will permanently reset all company configuration, masters, products, tags, vouchers, and reports on this device. Continue?'
+  );
+  if (!confirmed) return;
+  await dbCall('resetCompanyData');
+  state.reportDatesInitialized = false;
+  await refreshSnapshot();
+  resetVoucherForm();
+  switchView('configuration');
+  showToast('New company created. Enter the company details to continue.');
 }
 
 async function saveCoaForm(level) {
@@ -1505,6 +1645,7 @@ function bindEvents() {
     els.reportFromDate.value = financialYearStartIso(state.company.financialYearStart);
     showToast('Configuration saved.');
   });
+  els.newCompany.addEventListener('click', () => createNewCompany().catch((error) => showToast(error.message)));
 
   els.exportForm.addEventListener('submit', async (event) => {
     event.preventDefault();

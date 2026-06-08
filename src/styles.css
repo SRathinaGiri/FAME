@@ -56,6 +56,15 @@ button.secondary:hover {
   background: #dce6f2;
 }
 
+button.danger {
+  background: #fee4e2;
+  color: var(--danger);
+}
+
+button.danger:hover {
+  background: #fecdca;
+}
+
 .app-shell {
   display: grid;
   grid-template-columns: 280px minmax(0, 1fr);
@@ -143,6 +152,13 @@ button.secondary:hover {
   font-size: 13px;
   font-weight: 800;
   text-transform: uppercase;
+}
+
+#companyDisplay {
+  max-width: min(68vw, 900px);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 h1,
