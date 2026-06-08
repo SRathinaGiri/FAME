@@ -16,6 +16,44 @@ const timeZoneLocale = {
 const deviceTimeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
 const appLocale = timeZoneLocale[deviceTimeZone] || navigator.languages?.[0] || navigator.language || 'en-IN';
 const dateFormatter = new Intl.DateTimeFormat(appLocale, { day: '2-digit', month: '2-digit', year: 'numeric' });
+const indiaStates = [
+  ['AP', 'Andhra Pradesh'],
+  ['AR', 'Arunachal Pradesh'],
+  ['AS', 'Assam'],
+  ['BR', 'Bihar'],
+  ['CG', 'Chhattisgarh'],
+  ['GA', 'Goa'],
+  ['GJ', 'Gujarat'],
+  ['HR', 'Haryana'],
+  ['HP', 'Himachal Pradesh'],
+  ['JH', 'Jharkhand'],
+  ['KA', 'Karnataka'],
+  ['KL', 'Kerala'],
+  ['MP', 'Madhya Pradesh'],
+  ['MH', 'Maharashtra'],
+  ['MN', 'Manipur'],
+  ['ML', 'Meghalaya'],
+  ['MZ', 'Mizoram'],
+  ['NL', 'Nagaland'],
+  ['OD', 'Odisha'],
+  ['PB', 'Punjab'],
+  ['RJ', 'Rajasthan'],
+  ['SK', 'Sikkim'],
+  ['TN', 'Tamil Nadu'],
+  ['TS', 'Telangana'],
+  ['TR', 'Tripura'],
+  ['UP', 'Uttar Pradesh'],
+  ['UK', 'Uttarakhand'],
+  ['WB', 'West Bengal'],
+  ['AN', 'Andaman and Nicobar Islands'],
+  ['CH', 'Chandigarh'],
+  ['DN', 'Dadra and Nagar Haveli and Daman and Diu'],
+  ['DL', 'Delhi'],
+  ['JK', 'Jammu and Kashmir'],
+  ['LA', 'Ladakh'],
+  ['LD', 'Lakshadweep'],
+  ['PY', 'Puducherry']
+].map(([code, name]) => ({ code, name }));
 
 const state = {
   accountTypes: [],
@@ -292,6 +330,20 @@ function accountLabel(account) {
   return `${account.code} - ${account.name}`;
 }
 
+function stateLabel(code) {
+  const match = indiaStates.find((item) => item.code === code);
+  return match ? `${match.name} (${match.code})` : code || '';
+}
+
+function renderStateOptions(select, selected = '') {
+  renderOptions(select, indiaStates, {
+    label: (item) => `${item.name} (${item.code})`,
+    value: (item) => item.code,
+    empty: 'Select State / UT',
+    selected
+  });
+}
+
 function accountMatchesFilter(account, filter) {
   if (!filter || filter === 'all') return true;
   if (filter === 'cashBank') return account.headCode === '101000';
@@ -394,6 +446,7 @@ function clearCoaForm(level) {
 }
 
 function renderCoaMasters() {
+  renderStateOptions(els.accountState, els.accountState.value);
   renderOptions(els.headType, state.accountTypes, { label: (type) => type.name });
   renderOptions(els.subheadType, state.accountTypes, { label: (type) => type.name });
   renderHeadOptions(els.subheadHead, els.subheadType.value);
@@ -456,7 +509,7 @@ function renderCompanyMaster() {
   const company = state.company || {};
   els.companyName.value = company.name || '';
   els.companyAddress.value = company.address || '';
-  els.companyState.value = company.state || '';
+  renderStateOptions(els.companyState, company.state || '');
   els.companyCountry.value = company.country || '';
   els.companyGstNo.value = company.gstNo || '';
   els.companyPanNo.value = company.panNo || '';
@@ -684,7 +737,7 @@ function renderTaxJournal(data) {
           <td>${voucherButton(row)}</td>
           <td>${escapeHtml(row.invoiceNo || row.referenceNo || '')}</td>
           <td>${escapeHtml(row.partyCode ? `${row.partyCode} - ${row.partyName}` : '')}</td>
-          <td>${escapeHtml(row.partyState || '')}</td>
+          <td>${escapeHtml(stateLabel(row.partyState))}</td>
           <td>${escapeHtml(row.productName)}</td>
           <td>${escapeHtml(row.hsnSacCode || '')}</td>
           <td class="amount">${escapeHtml(row.quantity)}</td>
@@ -733,7 +786,7 @@ function renderTaxJournal(data) {
         row.voucherNo,
         row.invoiceNo || row.referenceNo || '',
         row.partyCode ? `${row.partyCode} - ${row.partyName}` : '',
-        row.partyState || '',
+        stateLabel(row.partyState),
         row.productName,
         row.hsnSacCode || '',
         Number(row.quantity || 0),
@@ -1147,7 +1200,7 @@ function renderVoucherMode() {
       account.isPersonal && !account.isSystem && account.headCode === partyHeadCode
     );
     renderOptions(els.voucherParty, parties, {
-      label: (account) => `${accountLabel(account)}${account.state ? ` | ${account.state}` : ''}`,
+      label: (account) => `${accountLabel(account)}${account.state ? ` | ${stateLabel(account.state)}` : ''}`,
       empty: `Select ${isOutwardInvoiceType() ? 'customer' : 'supplier'}`
     });
     if (parties.some((account) => account.id === selectedParty)) els.voucherParty.value = selectedParty;
@@ -1705,6 +1758,8 @@ async function prepareServiceWorker() {
 async function boot() {
   document.documentElement.lang = appLocale;
   document.querySelectorAll('input[type="date"]').forEach((input) => input.setAttribute('lang', appLocale));
+  renderStateOptions(els.accountState);
+  renderStateOptions(els.companyState);
   bindEvents();
   els.voucherDate.value = todayIso();
   els.reportFromDate.value = `${todayIso().slice(0, 4)}-01-01`;
