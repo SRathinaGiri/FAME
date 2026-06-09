@@ -21,6 +21,7 @@
     "@sqlite.org/sqlite-wasm": "^3.53.0-build1",
     "jspdf": "^4.2.1",
     "jspdf-autotable": "^5.0.8",
+    "jszip": "^3.10.1",
     "vite": "^8.0.16"
   }
 }

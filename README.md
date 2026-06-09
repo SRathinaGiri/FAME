@@ -16,6 +16,7 @@ F.A.M.E is a local-first accounting PWA built as a self-contained browser app. T
 - Fixed asset purchase/sale tracking, day-prorated SLM/WDV schedules, depreciation journals, and disposal working notes
 - Trial balance and recent voucher dashboard
 - Password-encrypted JSON backup export/import
+- Full database ZIP-of-CSVs export with Power BI relationship metadata and Power Query guidance
 - New company reset flow with backup prompt
 
 ## Development

@@ -1954,8 +1954,18 @@ function getSnapshot() {
 
 function exportData() {
   const data = {};
-  for (const table of TABLES) data[table] = all(`SELECT * FROM ${table} ORDER BY rowid`);
-  return { app: 'F.A.M.E', schemaVersion: SCHEMA_VERSION, exportedAt: new Date().toISOString(), data };
+  const tableColumns = {};
+  for (const table of TABLES) {
+    data[table] = all(`SELECT * FROM ${table} ORDER BY rowid`);
+    tableColumns[table] = all(`PRAGMA table_info(${table})`).map((column) => column.name);
+  }
+  return {
+    app: 'F.A.M.E',
+    schemaVersion: SCHEMA_VERSION,
+    exportedAt: new Date().toISOString(),
+    tableColumns,
+    data
+  };
 }
 
 function replaceData(backup) {

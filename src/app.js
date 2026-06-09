@@ -199,6 +199,7 @@ const els = {
   exportPassword: document.querySelector('#exportPassword'),
   importPassword: document.querySelector('#importPassword'),
   importFile: document.querySelector('#importFile'),
+  exportBiZip: document.querySelector('#exportBiZip'),
   tagList: document.querySelector('#tagList'),
   tagForm: document.querySelector('#tagForm'),
   tagName: document.querySelector('#tagName'),
@@ -1809,6 +1810,22 @@ function downloadJson(filename, data) {
   URL.revokeObjectURL(url);
 }
 
+function downloadBlob(filename, blob) {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
+async function exportBiZip() {
+  const backup = await dbCall('exportData');
+  const { buildBiExport } = await import('./bi-export.js');
+  const blob = await buildBiExport(backup, companyDisplayName());
+  downloadBlob(`fame-powerbi-${todayIso()}.zip`, blob);
+}
+
 async function parseBackupFile(file, password) {
   const parsed = JSON.parse(await file.text());
   if (parsed?.format === 'fame.encrypted.backup') {
@@ -2040,6 +2057,11 @@ function bindEvents() {
     event.preventDefault();
     downloadJson(`fame-backup-${todayIso()}.json`, await encryptBackup(await dbCall('exportData'), els.exportPassword.value));
     els.exportForm.reset();
+  });
+  els.exportBiZip.addEventListener('click', () => {
+    exportBiZip()
+      .then(() => showToast('Power BI ZIP export created.'))
+      .catch((error) => showToast(error.message));
   });
   els.importForm.addEventListener('submit', async (event) => {
     event.preventDefault();
