@@ -189,6 +189,16 @@ class Generator:
         self.voucher_seq[key] = self.voucher_seq.get(key, 0) + 1
         return f"{prefix}-{key[1]}-{self.voucher_seq[key]:04d}"
 
+    def renumber_vouchers(self) -> None:
+        self.voucher_seq.clear()
+        indexed_vouchers = list(enumerate(self.data["vouchers"]))
+        indexed_vouchers.sort(key=lambda item: (item[1]["voucher_date"], item[0]))
+        for _, voucher in indexed_vouchers:
+            voucher["voucher_no"] = self.voucher_no(
+                voucher["type"],
+                date.fromisoformat(voucher["voucher_date"]),
+            )
+
     def money(self, rupees: float) -> int:
         return int(round(rupees * 100))
 
@@ -211,6 +221,7 @@ class Generator:
         self.add_fixed_asset_purchases()
         self.add_transactions()
         self.add_asset_sales()
+        self.renumber_vouchers()
         return {
             "app": APP_NAME,
             "schemaVersion": SCHEMA_VERSION,
