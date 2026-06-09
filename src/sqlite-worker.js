@@ -1,8 +1,8 @@
 import sqlite3InitModule from './vendor/sqlite/index.mjs';
 
-const SCHEMA_VERSION = 10;
-const DB_FILE = '/fame-v10.sqlite3';
-const IDB_NAME = 'fame-sqlite-fallback-v10';
+const SCHEMA_VERSION = 11;
+const DB_FILE = '/fame-v11.sqlite3';
+const IDB_NAME = 'fame-sqlite-fallback-v11';
 const IDB_STORE = 'snapshots';
 const IDB_KEY = 'latest';
 const TABLES = [
@@ -19,7 +19,8 @@ const TABLES = [
   'vouchers',
   'voucher_lines',
   'voucher_items',
-  'voucher_tags'
+  'voucher_tags',
+  'fixed_asset_depreciation_entries'
 ];
 
 let sqlite3;
@@ -308,6 +309,17 @@ function ensureSchema() {
       tag_id TEXT NOT NULL REFERENCES tags(id) ON DELETE CASCADE,
       PRIMARY KEY (voucher_id, tag_id)
     );
+    CREATE TABLE IF NOT EXISTS fixed_asset_depreciation_entries (
+      id TEXT PRIMARY KEY,
+      asset_id TEXT NOT NULL REFERENCES fixed_assets(id) ON DELETE CASCADE,
+      voucher_id TEXT NOT NULL REFERENCES vouchers(id) ON DELETE CASCADE,
+      posting_type TEXT NOT NULL CHECK (posting_type IN ('journal','sale')),
+      financial_year_start TEXT NOT NULL,
+      through_date TEXT NOT NULL,
+      depreciation_days INTEGER NOT NULL CHECK (depreciation_days >= 0),
+      amount_minor INTEGER NOT NULL CHECK (amount_minor > 0),
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
     CREATE INDEX IF NOT EXISTS idx_heads_type ON head_accounts(type_id);
     CREATE INDEX IF NOT EXISTS idx_subheads_head ON subhead_accounts(head_id);
     CREATE INDEX IF NOT EXISTS idx_accounts_subhead ON accounts(subhead_id);
@@ -315,6 +327,7 @@ function ensureSchema() {
     CREATE INDEX IF NOT EXISTS idx_voucher_lines_account ON voucher_lines(account_id);
     CREATE INDEX IF NOT EXISTS idx_voucher_items_voucher ON voucher_items(voucher_id);
     CREATE INDEX IF NOT EXISTS idx_fixed_assets_account ON fixed_assets(asset_account_id);
+    CREATE INDEX IF NOT EXISTS idx_fixed_asset_depreciation_asset ON fixed_asset_depreciation_entries(asset_id);
   `);
 
   const existing = one('SELECT value FROM settings WHERE key = ?', ['schema_version']);
@@ -601,11 +614,20 @@ function daysInclusive(fromDate, toDate) {
   return Math.floor((isoToUtc(toDate) - isoToUtc(fromDate)) / 86400000) + 1;
 }
 
+function workingAmount(minor) {
+  return (Number(minor || 0) / 100).toFixed(2);
+}
+
+function workingDate(value) {
+  if (!value) return '';
+  const [year, month, day] = value.split('-');
+  return `${day}-${month}-${year}`;
+}
+
 function depreciationForRange(asset, fromDate, toDate, openingWdvMinor) {
   const activeFrom = [fromDate, asset.purchaseDate].filter(Boolean).sort().at(-1);
   const activeTo = asset.saleDate && asset.saleDate < toDate ? asset.saleDate : toDate;
   const activeDays = daysInclusive(activeFrom, activeTo);
-  if (!activeDays || openingWdvMinor <= Number(asset.scrapValueMinor || 0)) return { depreciationMinor: 0, activeDays };
   const yearDays = daysInclusive(financialYearStartFor(fromDate), addDaysIso(nextFinancialYearStart(fromDate), -1)) || 365;
   const baseMinor = asset.depreciationMethod === 'WDV'
     ? openingWdvMinor
@@ -613,29 +635,151 @@ function depreciationForRange(asset, fromDate, toDate, openingWdvMinor) {
   const annualDepMinor = Math.round(baseMinor * Number(asset.depreciationRate || 0) / 100);
   const proratedMinor = Math.round(annualDepMinor * activeDays / yearDays);
   const maxDepMinor = Math.max(0, openingWdvMinor - Number(asset.scrapValueMinor || 0));
-  return { depreciationMinor: Math.min(proratedMinor, maxDepMinor), activeDays };
+  const depreciationMinor = !activeDays || openingWdvMinor <= Number(asset.scrapValueMinor || 0)
+    ? 0
+    : Math.min(proratedMinor, maxDepMinor);
+  return {
+    depreciationMinor,
+    activeFrom,
+    activeTo,
+    activeDays,
+    yearDays,
+    baseMinor,
+    annualDepMinor,
+    proratedMinor,
+    maxDepMinor
+  };
 }
 
 function depreciationPosition(asset, asOfDate) {
   let cursor = financialYearStartFor(asset.purchaseDate);
   let wdvMinor = Number(asset.purchaseAmountMinor || 0);
   let depreciationMinor = 0;
+  const periods = [];
   while (cursor && cursor <= asOfDate) {
     const yearEnd = addDaysIso(nextFinancialYearStart(cursor), -1);
     const periodEnd = yearEnd < asOfDate ? yearEnd : asOfDate;
     const result = depreciationForRange(asset, cursor, periodEnd, wdvMinor);
+    periods.push(result);
     depreciationMinor += result.depreciationMinor;
     wdvMinor -= result.depreciationMinor;
     if (periodEnd >= asOfDate || (asset.saleDate && periodEnd >= asset.saleDate)) break;
     cursor = nextFinancialYearStart(cursor);
   }
-  return { depreciationMinor, wdvMinor };
+  return { depreciationMinor, wdvMinor, periods };
+}
+
+function depreciationWorkingNote(asset, asOfDate) {
+  const position = depreciationPosition(asset, asOfDate);
+  const method = asset.depreciationMethod === 'WDV' ? 'WDV' : 'SLM';
+  const periodNotes = position.periods
+    .filter((period) => period.activeDays > 0)
+    .map((period) => (
+      `${workingDate(period.activeFrom)} to ${workingDate(period.activeTo)}: `
+      + `${workingAmount(period.baseMinor)} x ${Number(asset.depreciationRate || 0)}%`
+      + ` x ${period.activeDays}/${period.yearDays} = ${workingAmount(period.depreciationMinor)}`
+      + (period.depreciationMinor < period.proratedMinor ? ' (limited to scrap value)' : '')
+    ));
+  return {
+    ...position,
+    text: `${method} depreciation; ${periodNotes.join('; ') || 'no depreciation days'}; `
+      + `accumulated depreciation ${workingAmount(position.depreciationMinor)}; `
+      + `WDV ${workingAmount(position.wdvMinor)}; scrap value ${workingAmount(asset.scrapValueMinor)}`
+  };
+}
+
+function depreciationPeriodWorkingNote(asset, period) {
+  return `${asset.depreciationMethod} depreciation for ${asset.name}: `
+    + `${workingAmount(period.baseMinor)} x ${Number(asset.depreciationRate || 0)}%`
+    + ` x ${period.activeDays}/${period.yearDays} = ${workingAmount(period.depreciationMinor)}`
+    + ` (${workingDate(period.activeFrom)} to ${workingDate(period.activeTo)})`
+    + (period.depreciationMinor < period.proratedMinor ? '; limited to scrap value' : '');
+}
+
+function postedDepreciationMinor(assetId, throughDate = '', excludeVoucherId = '') {
+  const row = one(`
+    SELECT COALESCE(SUM(amount_minor), 0) AS amountMinor
+    FROM fixed_asset_depreciation_entries
+    WHERE asset_id = ?
+      AND (? = '' OR through_date <= ?)
+      AND (? = '' OR voucher_id <> ?)
+  `, [assetId, throughDate, throughDate, excludeVoucherId, excludeVoucherId]);
+  return Number(row?.amountMinor || 0);
+}
+
+async function postFixedAssetDepreciation({ asOfDate = '' } = {}) {
+  if (!asOfDate) throw new Error('Select an as-at date for depreciation posting.');
+  const accounts = Object.fromEntries(
+    all(`SELECT id, code FROM accounts WHERE code IN ('104901','502301')`).map((row) => [row.code, row.id])
+  );
+  if (!accounts['104901'] || !accounts['502301']) {
+    throw new Error('Depreciation expense and accumulated depreciation accounts are not configured.');
+  }
+  let voucherCount = 0;
+  let amountMinor = 0;
+  transaction(() => {
+    for (const asset of listFixedAssets()) {
+      const effectiveDate = asset.saleDate && asset.saleDate < asOfDate ? asset.saleDate : asOfDate;
+      const position = depreciationPosition(asset, effectiveDate);
+      for (const period of position.periods) {
+        if (!period.depreciationMinor) continue;
+        const financialYearStart = financialYearStartFor(period.activeTo);
+        const existing = one(`
+          SELECT COALESCE(SUM(amount_minor), 0) AS amountMinor
+          FROM fixed_asset_depreciation_entries
+          WHERE asset_id = ? AND financial_year_start = ?
+        `, [asset.id, financialYearStart]);
+        const existingMinor = Number(existing?.amountMinor || 0);
+        const outstandingMinor = Math.max(0, period.depreciationMinor - existingMinor);
+        if (!outstandingMinor) continue;
+        const voucherId = crypto.randomUUID();
+        const narration = `${depreciationPeriodWorkingNote(asset, period)}; `
+          + `less already posted ${workingAmount(existingMinor)} = journal amount ${workingAmount(outstandingMinor)}`;
+        exec(`
+          INSERT INTO vouchers (
+            id, voucher_no, type, voucher_date, narration
+          ) VALUES (?, ?, 'journal', ?, ?)
+        `, [voucherId, nextVoucherNo('journal', period.activeTo), period.activeTo, narration]);
+        exec(`
+          INSERT INTO voucher_lines (
+            id, voucher_id, account_id, description, debit_minor, credit_minor, sort_order
+          ) VALUES (?, ?, ?, ?, ?, 0, 0)
+        `, [crypto.randomUUID(), voucherId, accounts['502301'], narration, outstandingMinor]);
+        exec(`
+          INSERT INTO voucher_lines (
+            id, voucher_id, account_id, description, debit_minor, credit_minor, sort_order
+          ) VALUES (?, ?, ?, ?, 0, ?, 1)
+        `, [crypto.randomUUID(), voucherId, accounts['104901'], narration, outstandingMinor]);
+        exec(`
+          INSERT INTO fixed_asset_depreciation_entries (
+            id, asset_id, voucher_id, posting_type, financial_year_start, through_date,
+            depreciation_days, amount_minor
+          ) VALUES (?, ?, ?, 'journal', ?, ?, ?, ?)
+        `, [
+          crypto.randomUUID(),
+          asset.id,
+          voucherId,
+          financialYearStart,
+          period.activeTo,
+          period.activeDays,
+          outstandingMinor
+        ]);
+        voucherCount += 1;
+        amountMinor += outstandingMinor;
+      }
+    }
+  });
+  await persistIfMirrored();
+  return { voucherCount, amountMinor };
 }
 
 function fixedAssetScheduleRows(asOfDate) {
   const financialYearStart = financialYearStartFor(asOfDate);
   const financialYearEnd = addDaysIso(nextFinancialYearStart(asOfDate), -1);
-  const rows = listFixedAssets().map((asset) => {
+  const rows = listFixedAssets().filter((asset) =>
+    asset.purchaseDate <= financialYearEnd
+    && (!asset.saleDate || asset.saleDate >= financialYearStart)
+  ).map((asset) => {
     const opening = depreciationPosition(asset, addDaysIso(financialYearStart, -1));
     const additionMinor = asset.purchaseDate >= financialYearStart && asset.purchaseDate <= financialYearEnd
       ? Number(asset.purchaseAmountMinor || 0)
@@ -648,10 +792,18 @@ function fixedAssetScheduleRows(asOfDate) {
       : opening.wdvMinor;
     const yearEnd = asset.saleDate && asset.saleDate < financialYearEnd ? asset.saleDate : financialYearEnd;
     const current = depreciationForRange(asset, financialYearStart, yearEnd, yearOpeningWdvMinor);
-    const closingWdvMinor = Math.max(
-      Number(asset.scrapValueMinor || 0),
-      yearOpeningWdvMinor - current.depreciationMinor
-    );
+    const postedCurrentYear = Number(one(`
+      SELECT COALESCE(SUM(amount_minor), 0) AS amountMinor
+      FROM fixed_asset_depreciation_entries
+      WHERE asset_id = ? AND financial_year_start = ?
+    `, [asset.id, financialYearStart])?.amountMinor || 0);
+    const soldByYearEnd = asset.saleDate && asset.saleDate <= financialYearEnd;
+    const closingWdvMinor = soldByYearEnd
+      ? 0
+      : Math.max(
+        Number(asset.scrapValueMinor || 0),
+        yearOpeningWdvMinor - current.depreciationMinor
+      );
     return {
       ...asset,
       financialYearStart,
@@ -661,8 +813,14 @@ function fixedAssetScheduleRows(asOfDate) {
       disposalMinor,
       depreciationDays: current.activeDays,
       depreciationMinor: current.depreciationMinor,
+      postedDepreciationMinor: postedCurrentYear,
+      outstandingDepreciationMinor: Math.max(0, current.depreciationMinor - postedCurrentYear),
       accumulatedDepreciationMinor: opening.depreciationMinor + current.depreciationMinor,
-      closingWdvMinor
+      closingWdvMinor,
+      workingNote: `${asset.depreciationMethod} depreciation: ${workingAmount(current.baseMinor)}`
+        + ` x ${Number(asset.depreciationRate || 0)}% x ${current.activeDays}/${current.yearDays}`
+        + ` = ${workingAmount(current.depreciationMinor)}`
+        + (current.depreciationMinor < current.proratedMinor ? '; limited to scrap value' : '')
     };
   });
   const totals = rows.reduce((sum, row) => ({
@@ -670,6 +828,8 @@ function fixedAssetScheduleRows(asOfDate) {
     additionMinor: sum.additionMinor + row.additionMinor,
     disposalMinor: sum.disposalMinor + row.disposalMinor,
     depreciationMinor: sum.depreciationMinor + row.depreciationMinor,
+    postedDepreciationMinor: sum.postedDepreciationMinor + row.postedDepreciationMinor,
+    outstandingDepreciationMinor: sum.outstandingDepreciationMinor + row.outstandingDepreciationMinor,
     accumulatedDepreciationMinor: sum.accumulatedDepreciationMinor + row.accumulatedDepreciationMinor,
     closingWdvMinor: sum.closingWdvMinor + row.closingWdvMinor
   }), {
@@ -677,6 +837,8 @@ function fixedAssetScheduleRows(asOfDate) {
     additionMinor: 0,
     disposalMinor: 0,
     depreciationMinor: 0,
+    postedDepreciationMinor: 0,
+    outstandingDepreciationMinor: 0,
     accumulatedDepreciationMinor: 0,
     closingWdvMinor: 0
   });
@@ -1033,7 +1195,11 @@ function invoicePostingPayload(voucher) {
     : null;
   if (isFixedAssetPurchase && !fixedAssetAccount) throw new Error('Select a fixed asset account.');
   const soldAsset = isFixedAssetSale
-    ? one('SELECT * FROM fixed_assets WHERE id = ? AND sale_voucher_id IS NULL', [fixedAsset.assetId])
+    ? one(`
+        SELECT * FROM fixed_assets
+        WHERE id = ?
+          AND (sale_voucher_id IS NULL OR sale_voucher_id = ?)
+      `, [fixedAsset.assetId, voucher.id || ''])
     : null;
   if (isFixedAssetSale && !soldAsset) throw new Error('Select an unsold fixed asset.');
 
@@ -1079,6 +1245,8 @@ function invoicePostingPayload(voucher) {
   });
   if (!items.length) throw new Error('Add at least one product or service.');
   const invoiceTotalMinor = items.reduce((sum, item) => sum + item.totalMinor, 0);
+  let calculatedNarration = voucher.narration || '';
+  let depreciationEntries = [];
   if (isFixedAssetSale) {
     const assetForDep = {
       purchaseDate: soldAsset.purchase_date,
@@ -1089,20 +1257,58 @@ function invoicePostingPayload(voucher) {
       saleDate: voucher.voucherDate
     };
     const saleTaxableMinor = items.reduce((sum, item) => sum + item.taxableMinor, 0);
-    const depreciation = depreciationPosition(assetForDep, voucher.voucherDate).depreciationMinor;
+    const depreciationWorking = depreciationWorkingNote(assetForDep, voucher.voucherDate);
+    const depreciation = depreciationWorking.depreciationMinor;
+    depreciationEntries = depreciationWorking.periods.map((period) => {
+      const financialYearStart = financialYearStartFor(period.activeTo);
+      const existing = one(`
+        SELECT COALESCE(SUM(amount_minor), 0) AS amountMinor
+        FROM fixed_asset_depreciation_entries
+        WHERE asset_id = ? AND financial_year_start = ?
+          AND (? = '' OR voucher_id <> ?)
+      `, [soldAsset.id, financialYearStart, voucher.id || '', voucher.id || '']);
+      return {
+        financialYearStart,
+        throughDate: period.activeTo,
+        depreciationDays: period.activeDays,
+        amountMinor: Math.max(0, period.depreciationMinor - Number(existing?.amountMinor || 0))
+      };
+    }).filter((entry) => entry.amountMinor > 0);
+    const unpostedDepreciation = depreciationEntries.reduce((sum, entry) => sum + entry.amountMinor, 0);
+    const postedDepreciation = Math.max(0, depreciation - unpostedDepreciation);
     const bookValueMinor = Math.max(0, Number(soldAsset.purchase_amount_minor || 0) - depreciation);
     const profitMinor = Math.max(0, saleTaxableMinor - bookValueMinor);
     const lossMinor = Math.max(0, bookValueMinor - saleTaxableMinor);
+    const resultNote = profitMinor
+      ? `profit ${workingAmount(profitMinor)} = sale value ${workingAmount(saleTaxableMinor)} - book value ${workingAmount(bookValueMinor)}`
+      : `loss ${workingAmount(lossMinor)} = book value ${workingAmount(bookValueMinor)} - sale value ${workingAmount(saleTaxableMinor)}`;
+    const workingNote = `Fixed asset disposal working for ${soldAsset.name}: cost ${workingAmount(soldAsset.purchase_amount_minor)}; `
+      + `${depreciationWorking.text}; depreciation already posted ${workingAmount(postedDepreciation)}; `
+      + `depreciation charged in sale voucher ${workingAmount(unpostedDepreciation)}; book value ${workingAmount(bookValueMinor)} = cost `
+      + `${workingAmount(soldAsset.purchase_amount_minor)} - accumulated depreciation ${workingAmount(depreciation)}; ${resultNote}.`;
+    const userNarration = String(voucher.narration || '').split(' | Fixed asset disposal working for ')[0].trim();
+    calculatedNarration = [userNarration, workingNote].filter(Boolean).join(' | ');
     const accounts = Object.fromEntries(
-      all(`SELECT id, code FROM accounts WHERE code IN ('104901','403101','503101')`).map((row) => [row.code, row.id])
+      all(`SELECT id, code FROM accounts WHERE code IN ('104901','403101','502301','503101')`).map((row) => [row.code, row.id])
     );
-    if (!accounts['104901'] || !accounts['403101'] || !accounts['503101']) {
+    if (!accounts['104901'] || !accounts['403101'] || !accounts['502301'] || !accounts['503101']) {
       throw new Error('Fixed asset disposal accounts are not configured.');
     }
     addPosting(soldAsset.asset_account_id, 0, Number(soldAsset.purchase_amount_minor || 0), soldAsset.name);
-    addPosting(accounts['104901'], depreciation, 0, `Accumulated depreciation on ${soldAsset.name}`);
-    addPosting(accounts['403101'], 0, profitMinor, `Profit on sale of ${soldAsset.name}`);
-    addPosting(accounts['503101'], lossMinor, 0, `Loss on sale of ${soldAsset.name}`);
+    addPosting(
+      accounts['104901'],
+      postedDepreciation,
+      0,
+      `Clear posted accumulated depreciation ${workingAmount(postedDepreciation)}`
+    );
+    addPosting(
+      accounts['502301'],
+      unpostedDepreciation,
+      0,
+      `Depreciation up to sale not previously posted ${workingAmount(unpostedDepreciation)}; ${depreciationWorking.text}`
+    );
+    addPosting(accounts['403101'], 0, profitMinor, `Profit ${workingAmount(profitMinor)} = sale ${workingAmount(saleTaxableMinor)} - WDV ${workingAmount(bookValueMinor)}`);
+    addPosting(accounts['503101'], lossMinor, 0, `Loss ${workingAmount(lossMinor)} = WDV ${workingAmount(bookValueMinor)} - sale ${workingAmount(saleTaxableMinor)}`);
   }
   addPosting(
     voucher.partyAccountId,
@@ -1110,12 +1316,13 @@ function invoicePostingPayload(voucher) {
     ['purchase', 'expense'].includes(voucher.type) ? invoiceTotalMinor : 0,
     ['sales', 'income'].includes(voucher.type) ? 'Customer' : 'Supplier'
   );
-  return { lines: [...postings.values()], items };
+  return { lines: [...postings.values()], items, narration: calculatedNarration, depreciationEntries };
 }
 
 async function saveVoucher(voucher) {
   const invoicePayload = invoicePostingPayload(voucher);
   const lines = invoicePayload?.lines || (voucher.lines || []).filter((line) => line.accountId);
+  const narration = invoicePayload?.narration ?? voucher.narration;
   if (!voucher.type || !voucher.voucherDate) throw new Error('Voucher type and date are required.');
   if (lines.length < 2) throw new Error('A voucher needs at least two posting lines.');
   const debit = lines.reduce((sum, line) => sum + Number(line.debitMinor || 0), 0);
@@ -1124,6 +1331,16 @@ async function saveVoucher(voucher) {
   let id = voucher.id;
   transaction(() => {
     if (id) {
+      if (one(`SELECT 1 AS yes FROM fixed_asset_depreciation_entries WHERE voucher_id = ? AND posting_type = 'journal'`, [id])) {
+        throw new Error('Generated depreciation journals cannot be edited individually.');
+      }
+      const purchasedAsset = one('SELECT id, sale_voucher_id AS saleVoucherId FROM fixed_assets WHERE purchase_voucher_id = ?', [id]);
+      if (purchasedAsset && (
+        purchasedAsset.saleVoucherId
+        || one('SELECT 1 AS yes FROM fixed_asset_depreciation_entries WHERE asset_id = ? LIMIT 1', [purchasedAsset.id])
+      )) {
+        throw new Error('A fixed asset purchase cannot be edited after depreciation or disposal has been posted.');
+      }
       const existing = one('SELECT type, voucher_date AS voucherDate, voucher_no AS voucherNo FROM vouchers WHERE id = ?', [id]);
       if (!existing) throw new Error('The selected voucher was not found.');
       const existingPrefix = voucherSeriesPrefix(existing.type, existing.voucherDate);
@@ -1137,11 +1354,13 @@ async function saveVoucher(voucher) {
              invoice_date = ?, narration = ?, party_account_id = ?, updated_at = CURRENT_TIMESTAMP
          WHERE id = ?`,
         [voucherNo, voucher.type, voucher.voucherDate, voucher.referenceNo || null,
-          voucher.invoiceNo || null, voucher.invoiceDate || null, voucher.narration || null,
+          voucher.invoiceNo || null, voucher.invoiceDate || null, narration || null,
           voucher.partyAccountId || null, id]
       );
       exec('DELETE FROM voucher_lines WHERE voucher_id = ?', [id]);
       exec('DELETE FROM voucher_items WHERE voucher_id = ?', [id]);
+      exec(`DELETE FROM fixed_asset_depreciation_entries WHERE voucher_id = ? AND posting_type = 'sale'`, [id]);
+      exec('DELETE FROM fixed_assets WHERE purchase_voucher_id = ?', [id]);
     } else {
       id = crypto.randomUUID();
       exec(
@@ -1151,7 +1370,7 @@ async function saveVoucher(voucher) {
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [id, nextVoucherNo(voucher.type, voucher.voucherDate), voucher.type,
           voucher.voucherDate, voucher.referenceNo || null, voucher.invoiceNo || null,
-          voucher.invoiceDate || null, voucher.narration || null, voucher.partyAccountId || null]
+          voucher.invoiceDate || null, narration || null, voucher.partyAccountId || null]
       );
     }
     lines.forEach((line, index) => {
@@ -1175,7 +1394,6 @@ async function saveVoucher(voucher) {
       const purchaseAmountMinor = lines
         .filter((line) => line.accountId === voucher.fixedAsset.assetAccountId)
         .reduce((sum, line) => sum + Number(line.debitMinor || 0), 0);
-      exec('DELETE FROM fixed_assets WHERE purchase_voucher_id = ?', [id]);
       exec(`
         INSERT INTO fixed_assets (
           id, name, asset_account_id, purchase_voucher_id, purchase_date,
@@ -1202,6 +1420,22 @@ async function saveVoucher(voucher) {
             updated_at = CURRENT_TIMESTAMP
         WHERE id = ?
       `, [id, voucher.voucherDate, saleAmountMinor, voucher.fixedAsset.assetId]);
+      for (const entry of invoicePayload?.depreciationEntries || []) {
+        exec(`
+          INSERT INTO fixed_asset_depreciation_entries (
+            id, asset_id, voucher_id, posting_type, financial_year_start,
+            through_date, depreciation_days, amount_minor
+          ) VALUES (?, ?, ?, 'sale', ?, ?, ?, ?)
+        `, [
+          crypto.randomUUID(),
+          voucher.fixedAsset.assetId,
+          id,
+          entry.financialYearStart,
+          entry.throughDate,
+          entry.depreciationDays,
+          entry.amountMinor
+        ]);
+      }
     }
     replaceVoucherTagLinks(id, voucher.tagIds || []);
   });
@@ -1211,7 +1445,26 @@ async function saveVoucher(voucher) {
 
 async function deleteVoucher({ id }) {
   if (!id) throw new Error('Select a voucher to delete.');
-  transaction(() => exec('DELETE FROM vouchers WHERE id = ?', [id]));
+  if (one(`SELECT 1 AS yes FROM fixed_asset_depreciation_entries WHERE voucher_id = ? AND posting_type = 'journal'`, [id])) {
+    throw new Error('Generated depreciation journals cannot be deleted individually.');
+  }
+  const purchasedAsset = one('SELECT id, sale_voucher_id AS saleVoucherId FROM fixed_assets WHERE purchase_voucher_id = ?', [id]);
+  if (purchasedAsset && (
+    purchasedAsset.saleVoucherId
+    || one('SELECT 1 AS yes FROM fixed_asset_depreciation_entries WHERE asset_id = ? LIMIT 1', [purchasedAsset.id])
+  )) {
+    throw new Error('A fixed asset purchase cannot be deleted after depreciation or disposal has been posted.');
+  }
+  transaction(() => {
+    exec(`
+      UPDATE fixed_assets
+      SET sale_voucher_id = NULL, sale_date = NULL, sale_amount_minor = 0,
+          updated_at = CURRENT_TIMESTAMP
+      WHERE sale_voucher_id = ?
+    `, [id]);
+    exec('DELETE FROM fixed_assets WHERE purchase_voucher_id = ?', [id]);
+    exec('DELETE FROM vouchers WHERE id = ?', [id]);
+  });
   await persistIfMirrored();
   return getSnapshot();
 }
@@ -1484,14 +1737,16 @@ function reportTrialBalance({ asOfDate = '' } = {}) {
 }
 
 function reportFixedAssetRegister({ asOfDate = '' } = {}) {
-  const rows = listFixedAssets().map((asset, index) => {
+  const rows = listFixedAssets().filter((asset) => !asOfDate || asset.purchaseDate <= asOfDate).map((asset, index) => {
     const position = depreciationPosition(asset, asOfDate || asset.saleDate || new Date().toISOString().slice(0, 10));
+    const soldAsOfDate = Boolean(asset.saleDate && (!asOfDate || asset.saleDate <= asOfDate));
     return {
       slNo: index + 1,
       ...asset,
       accumulatedDepreciationMinor: position.depreciationMinor,
-      wdvMinor: position.wdvMinor,
-      status: asset.saleDate ? 'Sold' : 'Active'
+      wdvMinor: soldAsOfDate ? 0 : position.wdvMinor,
+      saleAmountMinor: soldAsOfDate ? Number(asset.saleAmountMinor || 0) : 0,
+      status: soldAsOfDate ? 'Sold' : 'Active'
     };
   });
   const totals = rows.reduce((sum, row) => ({
@@ -1764,6 +2019,15 @@ function replaceData(backup) {
       for (const row of backup.data.voucher_lines || []) exec('INSERT INTO voucher_lines (id, voucher_id, account_id, description, debit_minor, credit_minor, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?)', [row.id, row.voucher_id, row.account_id, row.description, row.debit_minor, row.credit_minor, row.sort_order]);
       for (const row of backup.data.voucher_items || []) exec('INSERT INTO voucher_items (id, voucher_id, product_id, quantity, gst_rate, taxable_minor, cgst_minor, sgst_minor, igst_minor, total_minor, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', [row.id, row.voucher_id, row.product_id, row.quantity, row.gst_rate, row.taxable_minor, row.cgst_minor, row.sgst_minor, row.igst_minor, row.total_minor, row.sort_order]);
       for (const row of backup.data.voucher_tags || []) exec('INSERT INTO voucher_tags (voucher_id, tag_id) VALUES (?, ?)', [row.voucher_id, row.tag_id]);
+      for (const row of backup.data.fixed_asset_depreciation_entries || []) exec(`
+        INSERT INTO fixed_asset_depreciation_entries (
+          id, asset_id, voucher_id, posting_type, financial_year_start, through_date,
+          depreciation_days, amount_minor, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `, [
+        row.id, row.asset_id, row.voucher_id, row.posting_type, row.financial_year_start,
+        row.through_date, row.depreciation_days, row.amount_minor, row.created_at
+      ]);
       exec(`
         INSERT INTO settings (key, value) VALUES (?, ?)
         ON CONFLICT(key) DO UPDATE SET value = excluded.value
@@ -1802,6 +2066,7 @@ const handlers = {
   reportTrialBalance,
   reportFixedAssetRegister,
   reportFixedAssetSchedule,
+  postFixedAssetDepreciation,
   reportBalanceSheet,
   reportTag,
   reportTagTransactions,

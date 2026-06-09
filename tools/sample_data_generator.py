@@ -2,7 +2,7 @@
 """
 F.A.M.E sample data generator.
 
-Creates a schema-v10 backup JSON for a sample Indian electronics trading
+Creates a schema-v11 backup JSON for a sample Indian electronics trading
 company. Run without arguments for the Tkinter UI, or use --no-gui for CLI.
 
 Optional dependencies:
@@ -29,7 +29,7 @@ try:
 except Exception:  # pragma: no cover - fallback for machines without Faker
     Faker = None
 
-SCHEMA_VERSION = 10
+SCHEMA_VERSION = 11
 APP_NAME = "F.A.M.E"
 BACKUP_FORMAT = "fame.encrypted.backup"
 KDF_ITERATIONS = 250000
@@ -153,7 +153,8 @@ class Generator:
         self.data = {table: [] for table in [
             "settings", "account_types", "head_accounts", "subhead_accounts",
             "accounts", "company_master", "products", "fixed_assets", "tags",
-            "coa_tags", "vouchers", "voucher_lines", "voucher_items", "voucher_tags"
+            "coa_tags", "vouchers", "voucher_lines", "voucher_items", "voucher_tags",
+            "fixed_asset_depreciation_entries"
         ]}
         self.ids_by_code: dict[str, str] = {}
         self.voucher_seq: dict[tuple[str, str], int] = {}
@@ -363,6 +364,82 @@ class Generator:
             return cgst, sgst, 0, taxable + tax
         return 0, 0, tax, taxable + tax
 
+    def financial_year_start_for(self, value: date) -> date:
+        current = date(value.year, self.fy_month, self.fy_day)
+        return current if value >= current else date(value.year - 1, self.fy_month, self.fy_day)
+
+    def next_financial_year_start(self, value: date) -> date:
+        start = self.financial_year_start_for(value)
+        return date(start.year + 1, self.fy_month, self.fy_day)
+
+    @staticmethod
+    def days_inclusive(start: date, end: date) -> int:
+        return max(0, (end - start).days + 1)
+
+    @staticmethod
+    def working_amount(minor: int) -> str:
+        return f"{minor / 100:.2f}"
+
+    def depreciation_for_range(self, asset: dict, start: date, end: date, opening_wdv: int) -> dict:
+        purchase_date = date.fromisoformat(asset["purchase_date"])
+        sale_date = date.fromisoformat(asset["sale_date"]) if asset.get("sale_date") else None
+        active_from = max(start, purchase_date)
+        active_to = min(end, sale_date) if sale_date else end
+        active_days = self.days_inclusive(active_from, active_to)
+        year_days = self.days_inclusive(self.financial_year_start_for(start), self.next_financial_year_start(start) - timedelta(days=1))
+        base = opening_wdv if asset["depreciation_method"] == "WDV" else int(asset["purchase_amount_minor"])
+        annual = round(base * float(asset["depreciation_rate"]) / 100)
+        prorated = round(annual * active_days / year_days) if year_days else 0
+        maximum = max(0, opening_wdv - int(asset["scrap_value_minor"]))
+        depreciation = 0 if not active_days or opening_wdv <= int(asset["scrap_value_minor"]) else min(prorated, maximum)
+        return {
+            "active_from": active_from,
+            "active_to": active_to,
+            "active_days": active_days,
+            "year_days": year_days,
+            "base": base,
+            "prorated": prorated,
+            "depreciation": depreciation,
+        }
+
+    def depreciation_position(self, asset: dict, as_of_date: date) -> dict:
+        cursor = self.financial_year_start_for(date.fromisoformat(asset["purchase_date"]))
+        wdv = int(asset["purchase_amount_minor"])
+        depreciation = 0
+        periods = []
+        while cursor <= as_of_date:
+            year_end = self.next_financial_year_start(cursor) - timedelta(days=1)
+            period_end = min(year_end, as_of_date)
+            period = self.depreciation_for_range(asset, cursor, period_end, wdv)
+            periods.append(period)
+            depreciation += period["depreciation"]
+            wdv -= period["depreciation"]
+            sale_date = date.fromisoformat(asset["sale_date"]) if asset.get("sale_date") else None
+            if period_end >= as_of_date or (sale_date and period_end >= sale_date):
+                break
+            cursor = self.next_financial_year_start(cursor)
+        return {"depreciation": depreciation, "wdv": wdv, "periods": periods}
+
+    def depreciation_working_note(self, asset: dict, as_of_date: date) -> str:
+        position = self.depreciation_position(asset, as_of_date)
+        period_notes = []
+        for period in position["periods"]:
+            if not period["active_days"]:
+                continue
+            note = (
+                f"{period['active_from'].strftime('%d-%m-%Y')} to {period['active_to'].strftime('%d-%m-%Y')}: "
+                f"{self.working_amount(period['base'])} x {asset['depreciation_rate']}% "
+                f"x {period['active_days']}/{period['year_days']} = {self.working_amount(period['depreciation'])}"
+            )
+            if period["depreciation"] < period["prorated"]:
+                note += " (limited to scrap value)"
+            period_notes.append(note)
+        return (
+            f"{asset['depreciation_method']} depreciation; {'; '.join(period_notes) or 'no depreciation days'}; "
+            f"accumulated depreciation {self.working_amount(position['depreciation'])}; "
+            f"WDV {self.working_amount(position['wdv'])}; scrap value {self.working_amount(asset['scrap_value_minor'])}"
+        )
+
     def add_voucher(self, voucher_type: str, value: date, lines: list[tuple[str, str, int, int]], *,
                     party_id=None, invoice_no=None, narration=None) -> dict:
         lines = [(account_id, description, debit, credit) for account_id, description, debit, credit in lines if debit or credit]
@@ -454,22 +531,59 @@ class Generator:
             sale_value = int(asset["purchase_amount_minor"] * self.random.uniform(0.45, 0.9))
             product = self.products[0]
             cgst, sgst, igst, total = self.tax_split(sale_value, float(product["gst_rate"]), customer["state"])
-            depn = int(asset["purchase_amount_minor"] * min(0.45, float(asset["depreciation_rate"]) / 100))
+            asset_for_sale = {**asset, "sale_date": sale_date.isoformat()}
+            depreciation_position = self.depreciation_position(asset_for_sale, sale_date)
+            depn = depreciation_position["depreciation"]
             book_value = max(0, asset["purchase_amount_minor"] - depn)
             profit = max(0, sale_value - book_value)
             loss = max(0, book_value - sale_value)
+            depreciation_note = self.depreciation_working_note(asset_for_sale, sale_date)
+            result_note = (
+                f"profit {self.working_amount(profit)} = sale value {self.working_amount(sale_value)} "
+                f"- book value {self.working_amount(book_value)}"
+                if profit else
+                f"loss {self.working_amount(loss)} = book value {self.working_amount(book_value)} "
+                f"- sale value {self.working_amount(sale_value)}"
+            )
+            narration = (
+                f"Fixed asset disposal working for {asset['name']}: cost {self.working_amount(asset['purchase_amount_minor'])}; "
+                f"{depreciation_note}; book value {self.working_amount(book_value)} = cost "
+                f"{self.working_amount(asset['purchase_amount_minor'])} - accumulated depreciation "
+                f"{self.working_amount(depn)}; {result_note}."
+            )
             lines = [
                 (customer["id"], "Customer", total, 0),
                 (asset["asset_account_id"], asset["name"], 0, asset["purchase_amount_minor"]),
-                (self.account("104901"), f"Accumulated depreciation on {asset['name']}", depn, 0),
+                (self.account("502301"), f"Depreciation up to sale {self.working_amount(depn)}; {depreciation_note}", depn, 0),
             ]
             if self.config.gst_enabled:
                 lines += [(self.account("202101"), "Output CGST", 0, cgst), (self.account("202102"), "Output SGST", 0, sgst), (self.account("202103"), "Output IGST", 0, igst)]
             if profit:
-                lines.append((self.account("403101"), f"Profit on sale of {asset['name']}", 0, profit))
+                lines.append((self.account("403101"), f"Profit {self.working_amount(profit)} = sale {self.working_amount(sale_value)} - WDV {self.working_amount(book_value)}", 0, profit))
             if loss:
-                lines.append((self.account("503101"), f"Loss on sale of {asset['name']}", loss, 0))
-            voucher = self.add_voucher("sales", sale_date, lines, party_id=customer["id"], invoice_no=f"FAS-{sale_date.strftime('%Y%m%d')}")
+                lines.append((self.account("503101"), f"Loss {self.working_amount(loss)} = WDV {self.working_amount(book_value)} - sale {self.working_amount(sale_value)}", loss, 0))
+            voucher = self.add_voucher(
+                "sales",
+                sale_date,
+                lines,
+                party_id=customer["id"],
+                invoice_no=f"FAS-{sale_date.strftime('%Y%m%d')}",
+                narration=narration,
+            )
+            for period in depreciation_position["periods"]:
+                if not period["depreciation"]:
+                    continue
+                self.data["fixed_asset_depreciation_entries"].append({
+                    "id": self.uid(),
+                    "asset_id": asset["id"],
+                    "voucher_id": voucher["id"],
+                    "posting_type": "sale",
+                    "financial_year_start": self.financial_year_start_for(period["active_to"]).isoformat(),
+                    "through_date": period["active_to"].isoformat(),
+                    "depreciation_days": period["active_days"],
+                    "amount_minor": period["depreciation"],
+                    "created_at": self.now,
+                })
             self.add_item(voucher["id"], product, sale_value, customer["state"])
             asset["sale_voucher_id"] = voucher["id"]
             asset["sale_date"] = sale_date.isoformat()

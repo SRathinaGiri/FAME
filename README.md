@@ -13,7 +13,7 @@ F.A.M.E is a local-first accounting PWA built as a self-contained browser app. T
 - Product and service masters with HSN/SAC, GST rates, and ITC eligibility
 - GST-aware purchase and sales invoices with intra-state CGST/SGST and inter-state IGST
 - GST sales, purchase, expense, and income journals with export support
-- Fixed asset purchase/sale tracking with depreciation register and schedule reports
+- Fixed asset purchase/sale tracking, day-prorated SLM/WDV schedules, depreciation journals, and disposal working notes
 - Trial balance and recent voucher dashboard
 - Password-encrypted JSON backup export/import
 - New company reset flow with backup prompt

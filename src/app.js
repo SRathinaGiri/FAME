@@ -134,6 +134,7 @@ const els = {
   reportContent: document.querySelector('#reportContent'),
   exportReportExcel: document.querySelector('#exportReportExcel'),
   exportReportPdf: document.querySelector('#exportReportPdf'),
+  postDepreciation: document.querySelector('#postDepreciation'),
   reportDrilldown: document.querySelector('#reportDrilldown'),
   drilldownTitle: document.querySelector('#drilldownTitle'),
   drilldownMeta: document.querySelector('#drilldownMeta'),
@@ -1113,19 +1114,22 @@ function renderFixedAssetRegister(data) {
 
 function renderFixedAssetSchedule(data) {
   els.reportTitle.textContent = 'Fixed Asset Depreciation Schedule';
-  els.reportMeta.textContent = `${formatDate(data.financialYearStart)} to ${formatDate(data.financialYearEnd)}`;
+  els.reportMeta.textContent = `${formatDate(data.financialYearStart)} to ${formatDate(data.financialYearEnd)} | Posting date ${formatDate(dateInputValue(els.reportAsOfDate))}`;
   reportKpis([
     { label: 'Opening WDV', value: minorToMoney(data.totals.openingWdvMinor) },
     { label: 'Additions', value: minorToMoney(data.totals.additionMinor) },
     { label: 'Depreciation', value: minorToMoney(data.totals.depreciationMinor) },
+    { label: 'Posted', value: minorToMoney(data.totals.postedDepreciationMinor) },
+    { label: 'Outstanding', value: minorToMoney(data.totals.outstandingDepreciationMinor) },
     { label: 'Closing WDV', value: minorToMoney(data.totals.closingWdvMinor) }
   ]);
   const headers = [
     { label: 'Asset' }, { label: 'Method' }, { label: 'Rate %', amount: true },
     { label: 'Opening WDV', amount: true }, { label: 'Additions', amount: true },
     { label: 'Sale Value', amount: true }, { label: 'Depn. Days', amount: true },
-    { label: 'CY Depn.', amount: true }, { label: 'Accum. Depn.', amount: true },
-    { label: 'Closing WDV', amount: true }
+    { label: 'CY Depn.', amount: true }, { label: 'Posted', amount: true },
+    { label: 'Outstanding', amount: true }, { label: 'Accum. Depn.', amount: true },
+    { label: 'Closing WDV', amount: true }, { label: 'Working Note' }
   ];
   const body = data.rows.length
     ? data.rows.map((row) => `
@@ -1138,11 +1142,14 @@ function renderFixedAssetSchedule(data) {
           <td class="amount">${minorToMoney(row.disposalMinor)}</td>
           <td class="amount">${row.depreciationDays}</td>
           <td class="amount">${minorToMoney(row.depreciationMinor)}</td>
+          <td class="amount">${minorToMoney(row.postedDepreciationMinor)}</td>
+          <td class="amount">${minorToMoney(row.outstandingDepreciationMinor)}</td>
           <td class="amount">${minorToMoney(row.accumulatedDepreciationMinor)}</td>
           <td class="amount">${minorToMoney(row.closingWdvMinor)}</td>
+          <td>${escapeHtml(row.workingNote)}</td>
         </tr>
       `).join('')
-    : '<tr><td colspan="10" class="empty">No fixed assets recorded.</td></tr>';
+    : '<tr><td colspan="13" class="empty">No fixed assets recorded.</td></tr>';
   els.reportContent.innerHTML = reportTable(headers, body);
   state.reportExport = {
     title: els.reportTitle.textContent,
@@ -1152,8 +1159,9 @@ function renderFixedAssetSchedule(data) {
       row.name, row.depreciationMethod, Number(row.depreciationRate || 0),
       minorToNumber(row.openingWdvMinor), minorToNumber(row.additionMinor),
       minorToNumber(row.disposalMinor), row.depreciationDays,
-      minorToNumber(row.depreciationMinor), minorToNumber(row.accumulatedDepreciationMinor),
-      minorToNumber(row.closingWdvMinor)
+      minorToNumber(row.depreciationMinor), minorToNumber(row.postedDepreciationMinor),
+      minorToNumber(row.outstandingDepreciationMinor), minorToNumber(row.accumulatedDepreciationMinor),
+      minorToNumber(row.closingWdvMinor), row.workingNote
     ])
   };
 }
@@ -1312,6 +1320,7 @@ function setReportType(type, run = true) {
   els.reportFromField.classList.toggle('hidden', isAsOfReport);
   els.reportToField.classList.toggle('hidden', isAsOfReport);
   els.reportAsOfField.classList.toggle('hidden', !isAsOfReport);
+  els.postDepreciation.classList.toggle('hidden', type !== 'fixedAssetSchedule');
   if (isTaxJournal) els.reportSummary.innerHTML = '';
   if (run) runReport().catch((error) => showToast(error.message));
 }
@@ -1455,7 +1464,9 @@ function renderVoucherMode() {
   renderOptions(els.fixedAssetAccount, fixedAssetAccounts(), { label: accountLabel, empty: 'Select fixed asset account' });
   if (fixedAssetAccounts().some((account) => account.id === selectedAssetAccount)) els.fixedAssetAccount.value = selectedAssetAccount;
   const selectedSoldAsset = els.fixedAssetSaleSelect.value;
-  const saleAssets = state.fixedAssets.filter((asset) => !asset.saleDate);
+  const saleAssets = state.fixedAssets.filter((asset) =>
+    !asset.saleDate || asset.saleVoucherId === state.editingVoucherId
+  );
   renderOptions(els.fixedAssetSaleSelect, saleAssets, {
     label: (asset) => `${asset.name} | ${asset.assetAccountCode} - ${asset.assetAccountName}`,
     empty: 'Select asset sold'
@@ -1873,6 +1884,18 @@ function bindEvents() {
   });
   els.exportReportExcel.addEventListener('click', () => exportCurrentReportExcel().catch((error) => showToast(error.message)));
   els.exportReportPdf.addEventListener('click', () => exportCurrentReportPdf().catch((error) => showToast(error.message)));
+  els.postDepreciation.addEventListener('click', async () => {
+    const result = await dbCall('postFixedAssetDepreciation', {
+      asOfDate: dateInputValue(els.reportAsOfDate)
+    });
+    await refreshSnapshot();
+    await runReport();
+    showToast(
+      result.voucherCount
+        ? `${result.voucherCount} depreciation journal(s) posted for ${minorToMoney(result.amountMinor)}.`
+        : 'No outstanding depreciation to post.'
+    );
+  });
   els.closeDrilldown.addEventListener('click', () => els.reportDrilldown.classList.add('hidden'));
   els.headType.addEventListener('change', () => suggestCode('head', coaForms.head()).catch(() => undefined));
   els.subheadType.addEventListener('change', () => {
