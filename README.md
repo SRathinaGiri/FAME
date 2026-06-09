@@ -39,10 +39,11 @@ python tools/sample_data_generator.py
 CLI mode is also available:
 
 ```bash
-python tools/sample_data_generator.py --no-gui --transactions 1000 --accounts 100 --products 40 --assets 12 --password "change-me"
+python tools/sample_data_generator.py --no-gui --transactions 1000 --accounts 100 --products 40 --assets 12 --financial-year-start 01-04 --password "change-me"
 ```
 
 Supplying `--password` writes a F.A.M.E encrypted backup JSON compatible with the Backup import flow.
+The financial-year start uses `dd-mm` format and defaults to `01-04`.
 
 SQLite OPFS requires cross-origin isolation headers. The Vite config sends:
 

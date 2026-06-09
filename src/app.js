@@ -2,20 +2,7 @@ import { dbCall } from './db-client.js';
 import { decryptBackup, encryptBackup } from './crypto.js';
 
 const moneyFormatter = new Intl.NumberFormat('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-const timeZoneLocale = {
-  'Asia/Calcutta': 'en-IN',
-  'Asia/Kolkata': 'en-IN',
-  'Asia/Colombo': 'en-LK',
-  'Asia/Dhaka': 'en-BD',
-  'Asia/Karachi': 'en-PK',
-  'Asia/Kathmandu': 'en-NP',
-  'Europe/London': 'en-GB',
-  'Australia/Sydney': 'en-AU',
-  'Pacific/Auckland': 'en-NZ'
-};
-const deviceTimeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
-const appLocale = timeZoneLocale[deviceTimeZone] || navigator.languages?.[0] || navigator.language || 'en-IN';
-const dateFormatter = new Intl.DateTimeFormat(appLocale, { day: '2-digit', month: '2-digit', year: 'numeric' });
+const appLocale = 'en-IN';
 const indiaStates = [
   ['AP', 'Andhra Pradesh'],
   ['AR', 'Arunachal Pradesh'],
@@ -247,9 +234,42 @@ function minorToNumber(value) {
 
 function formatDate(value) {
   if (!value) return '';
-  const [year, month, day] = String(value).split('-').map(Number);
-  if (!year || !month || !day) return value;
-  return dateFormatter.format(new Date(year, month - 1, day));
+  const iso = normalizeDateValue(value);
+  const [year, month, day] = iso.split('-');
+  return `${day}-${month}-${year}`;
+}
+
+function normalizeDateValue(value) {
+  const text = String(value || '').trim();
+  if (!text) return '';
+  let year;
+  let month;
+  let day;
+  let match = text.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (match) {
+    [, year, month, day] = match;
+  } else {
+    match = text.match(/^(\d{2})-(\d{2})-(\d{4})$/);
+    if (!match) throw new Error('Enter dates in dd-mm-yyyy format.');
+    [, day, month, year] = match;
+  }
+  const candidate = new Date(Number(year), Number(month) - 1, Number(day));
+  if (
+    candidate.getFullYear() !== Number(year)
+    || candidate.getMonth() !== Number(month) - 1
+    || candidate.getDate() !== Number(day)
+  ) {
+    throw new Error('Enter a valid date in dd-mm-yyyy format.');
+  }
+  return `${year}-${month}-${day}`;
+}
+
+function dateInputValue(input) {
+  return normalizeDateValue(input.value);
+}
+
+function setDateInputValue(input, isoValue) {
+  input.value = isoValue ? formatDate(isoValue) : '';
 }
 
 function todayIso() {
@@ -533,7 +553,7 @@ function renderCompanyMaster() {
   els.companyRegistration1.value = company.registration1 || '';
   els.companyRegistration2.value = company.registration2 || '';
   els.companyRegistration3.value = company.registration3 || '';
-  els.companyFinancialYearStart.value = company.financialYearStart || `${todayIso().slice(0, 4)}-04-01`;
+  setDateInputValue(els.companyFinancialYearStart, company.financialYearStart || `${todayIso().slice(0, 4)}-04-01`);
   els.companyGstEnabled.checked = Boolean(company.gstEnabled);
   els.companyGstEnabled.disabled = state.hasTransactions;
   els.gstLockNote.classList.toggle('hidden', !state.hasTransactions);
@@ -713,7 +733,7 @@ function bindReportLinks(container) {
 
 function renderDaybook(data) {
   els.reportTitle.textContent = 'Daybook';
-  els.reportMeta.textContent = dateRangeLabel(els.reportFromDate.value, els.reportToDate.value);
+  els.reportMeta.textContent = dateRangeLabel(dateInputValue(els.reportFromDate), dateInputValue(els.reportToDate));
   reportKpis([
     { label: 'Debit', value: minorToMoney(data.totals.debitMinor) },
     { label: 'Credit', value: minorToMoney(data.totals.creditMinor) }
@@ -754,7 +774,7 @@ function renderDaybook(data) {
 
 function renderTaxJournal(data) {
   els.reportTitle.textContent = data.title;
-  els.reportMeta.textContent = dateRangeLabel(els.reportFromDate.value, els.reportToDate.value);
+  els.reportMeta.textContent = dateRangeLabel(dateInputValue(els.reportFromDate), dateInputValue(els.reportToDate));
   reportKpis([
     { label: 'Taxable', value: minorToMoney(data.totals.taxableMinor) },
     { label: 'CGST', value: minorToMoney(data.totals.cgstMinor) },
@@ -867,7 +887,7 @@ function ledgerTable(data) {
 
 function renderLedger(data) {
   els.reportTitle.textContent = `Ledger: ${data.account.code} - ${data.account.name}`;
-  els.reportMeta.textContent = dateRangeLabel(els.reportFromDate.value, els.reportToDate.value);
+  els.reportMeta.textContent = dateRangeLabel(dateInputValue(els.reportFromDate), dateInputValue(els.reportToDate));
   reportKpis([
     { label: 'Opening', value: balanceText(data.openingBalanceMinor) },
     { label: 'Closing', value: balanceText(data.closingBalanceMinor) }
@@ -934,7 +954,7 @@ function renderProfitLoss(data) {
   const expenses = statementSection('Expenses', data.rows.filter((row) => row.typeId === 'expense'));
   const resultLabel = data.profitMinor >= 0 ? 'Net Profit' : 'Net Loss';
   els.reportTitle.textContent = 'Profit and Loss Account';
-  els.reportMeta.textContent = dateRangeLabel(els.reportFromDate.value, els.reportToDate.value);
+  els.reportMeta.textContent = dateRangeLabel(dateInputValue(els.reportFromDate), dateInputValue(els.reportToDate));
   reportKpis([
     { label: 'Income', value: minorToMoney(data.incomeMinor) },
     { label: 'Expenses', value: minorToMoney(data.expenseMinor) },
@@ -955,7 +975,7 @@ function renderProfitLoss(data) {
 
 function renderTrialBalance(data) {
   els.reportTitle.textContent = 'Trial Balance';
-  els.reportMeta.textContent = `As at ${formatDate(els.reportAsOfDate.value)} | FY from ${formatDate(data.financialYearStart)}`;
+  els.reportMeta.textContent = `As at ${formatDate(dateInputValue(els.reportAsOfDate))} | FY from ${formatDate(data.financialYearStart)}`;
   reportKpis([
     { label: 'Opening Debit', value: minorToMoney(data.totals.openingDebitMinor) },
     { label: 'Opening Credit', value: minorToMoney(data.totals.openingCreditMinor) },
@@ -1043,7 +1063,7 @@ function renderTrialBalance(data) {
 
 function renderFixedAssetRegister(data) {
   els.reportTitle.textContent = 'Fixed Asset Register';
-  els.reportMeta.textContent = `As at ${formatDate(els.reportAsOfDate.value)}`;
+  els.reportMeta.textContent = `As at ${formatDate(dateInputValue(els.reportAsOfDate))}`;
   reportKpis([
     { label: 'Cost', value: minorToMoney(data.totals.purchaseAmountMinor) },
     { label: 'Accum. Depn.', value: minorToMoney(data.totals.accumulatedDepreciationMinor) },
@@ -1144,7 +1164,7 @@ function renderBalanceSheet(data) {
   const equity = statementSection('Equity', data.rows.filter((row) => row.typeId === 'equity'));
   const difference = data.assetsMinor - data.liabilitiesAndEquityMinor;
   els.reportTitle.textContent = 'Balance Sheet';
-  els.reportMeta.textContent = `As at ${formatDate(els.reportAsOfDate.value)}`;
+  els.reportMeta.textContent = `As at ${formatDate(dateInputValue(els.reportAsOfDate))}`;
   reportKpis([
     { label: 'Assets', value: minorToMoney(data.assetsMinor) },
     { label: 'Liabilities and Equity', value: minorToMoney(data.liabilitiesAndEquityMinor) },
@@ -1182,7 +1202,7 @@ function selectedTagReportMode() {
 function renderTagReport(data) {
   const modeLabel = data.mode === 'account' ? 'Account based' : 'Transaction based';
   els.reportTitle.textContent = `Tag Report: ${data.tag.name}`;
-  els.reportMeta.textContent = `${modeLabel} | ${dateRangeLabel(els.reportFromDate.value, els.reportToDate.value)}`;
+  els.reportMeta.textContent = `${modeLabel} | ${dateRangeLabel(dateInputValue(els.reportFromDate), dateInputValue(els.reportToDate))}`;
   reportKpis([
     { label: 'Debit', value: minorToMoney(data.totals.debitMinor) },
     { label: 'Credit', value: minorToMoney(data.totals.creditMinor) },
@@ -1228,6 +1248,9 @@ function renderTagReport(data) {
 
 async function runReport() {
   els.reportDrilldown.classList.add('hidden');
+  const fromDate = dateInputValue(els.reportFromDate);
+  const toDate = dateInputValue(els.reportToDate);
+  const asOfDate = dateInputValue(els.reportAsOfDate);
   const taxJournalTypes = {
     salesJournal: 'sales',
     purchaseJournal: 'purchase',
@@ -1235,27 +1258,27 @@ async function runReport() {
     incomeJournal: 'income'
   };
   if (state.activeReport === 'daybook') {
-    renderDaybook(await dbCall('reportDaybook', { fromDate: els.reportFromDate.value, toDate: els.reportToDate.value }));
+    renderDaybook(await dbCall('reportDaybook', { fromDate, toDate }));
   } else if (taxJournalTypes[state.activeReport]) {
     renderTaxJournal(await dbCall('reportTaxJournal', {
       type: taxJournalTypes[state.activeReport],
-      fromDate: els.reportFromDate.value,
-      toDate: els.reportToDate.value
+      fromDate,
+      toDate
     }));
   } else if (state.activeReport === 'ledger') {
     renderLedger(await dbCall('reportLedger', {
       accountId: els.reportAccount.value,
-      fromDate: els.reportFromDate.value,
-      toDate: els.reportToDate.value
+      fromDate,
+      toDate
     }));
   } else if (state.activeReport === 'profitLoss') {
-    renderProfitLoss(await dbCall('reportProfitLoss', { fromDate: els.reportFromDate.value, toDate: els.reportToDate.value }));
+    renderProfitLoss(await dbCall('reportProfitLoss', { fromDate, toDate }));
   } else if (state.activeReport === 'trialBalance') {
-    renderTrialBalance(await dbCall('reportTrialBalance', { asOfDate: els.reportAsOfDate.value }));
+    renderTrialBalance(await dbCall('reportTrialBalance', { asOfDate }));
   } else if (state.activeReport === 'fixedAssetRegister') {
-    renderFixedAssetRegister(await dbCall('reportFixedAssetRegister', { asOfDate: els.reportAsOfDate.value }));
+    renderFixedAssetRegister(await dbCall('reportFixedAssetRegister', { asOfDate }));
   } else if (state.activeReport === 'fixedAssetSchedule') {
-    renderFixedAssetSchedule(await dbCall('reportFixedAssetSchedule', { asOfDate: els.reportAsOfDate.value }));
+    renderFixedAssetSchedule(await dbCall('reportFixedAssetSchedule', { asOfDate }));
   } else if (state.activeReport === 'tag') {
     if (!els.reportTag.value) {
       els.reportTitle.textContent = 'Tag Report';
@@ -1268,11 +1291,11 @@ async function runReport() {
     renderTagReport(await dbCall('reportTag', {
       tagId: els.reportTag.value,
       mode: selectedTagReportMode(),
-      fromDate: els.reportFromDate.value,
-      toDate: els.reportToDate.value
+      fromDate,
+      toDate
     }));
   } else {
-    renderBalanceSheet(await dbCall('reportBalanceSheet', { asOfDate: els.reportAsOfDate.value }));
+    renderBalanceSheet(await dbCall('reportBalanceSheet', { asOfDate }));
   }
 }
 
@@ -1295,8 +1318,8 @@ function setReportType(type, run = true) {
 
 async function openAccountDrilldown(accountId) {
   const isAsOfReport = ['balanceSheet', 'trialBalance', 'fixedAssetRegister', 'fixedAssetSchedule'].includes(state.activeReport);
-  const fromDate = isAsOfReport ? '' : els.reportFromDate.value;
-  const toDate = isAsOfReport ? els.reportAsOfDate.value : els.reportToDate.value;
+  const fromDate = isAsOfReport ? '' : dateInputValue(els.reportFromDate);
+  const toDate = isAsOfReport ? dateInputValue(els.reportAsOfDate) : dateInputValue(els.reportToDate);
   const data = state.activeReport === 'tag'
     ? await dbCall('reportTagTransactions', {
         tagId: els.reportTag.value,
@@ -1642,7 +1665,7 @@ function resetVoucherForm() {
   state.editingVoucherId = null;
   els.voucherForm.reset();
   els.voucherEditSelect.value = '';
-  els.voucherDate.value = todayIso();
+  setDateInputValue(els.voucherDate, todayIso());
   els.voucherFixedAsset.checked = false;
   els.fixedAssetScrap.value = '';
   els.fixedAssetRate.value = '0';
@@ -1655,10 +1678,10 @@ function fillVoucherForm(voucherId) {
   if (!voucher) return resetVoucherForm();
   state.editingVoucherId = voucher.id;
   els.voucherType.value = voucher.type;
-  els.voucherDate.value = voucher.voucherDate;
+  setDateInputValue(els.voucherDate, voucher.voucherDate);
   els.referenceNo.value = voucher.referenceNo || '';
   els.invoiceNo.value = voucher.invoiceNo || '';
-  els.invoiceDate.value = voucher.invoiceDate || '';
+  setDateInputValue(els.invoiceDate, voucher.invoiceDate || '');
   els.narration.value = voucher.narration || '';
   els.voucherFixedAsset.checked = Boolean(voucher.fixedAsset);
   els.fixedAssetName.value = voucher.fixedAsset?.name || '';
@@ -1740,7 +1763,7 @@ async function refreshSnapshot() {
   renderProductMaster();
   renderFixedAssetModule();
   if (!state.reportDatesInitialized) {
-    els.reportFromDate.value = financialYearStartIso(state.company.financialYearStart);
+    setDateInputValue(els.reportFromDate, financialYearStartIso(state.company.financialYearStart));
     state.reportDatesInitialized = true;
   }
   renderTagList();
@@ -1908,10 +1931,10 @@ function bindEvents() {
     const result = await dbCall('saveVoucher', {
       id: state.editingVoucherId,
       type: els.voucherType.value,
-      voucherDate: els.voucherDate.value,
+      voucherDate: dateInputValue(els.voucherDate),
       referenceNo: els.referenceNo.value.trim(),
       invoiceNo: els.invoiceNo.value.trim(),
-      invoiceDate: els.invoiceDate.value,
+      invoiceDate: dateInputValue(els.invoiceDate),
       narration: els.narration.value.trim(),
       partyAccountId: isInvoiceType() ? els.voucherParty.value : null,
       tagIds: selectedValues(els.voucherTags),
@@ -1981,11 +2004,11 @@ function bindEvents() {
       registration1: els.companyRegistration1.value,
       registration2: els.companyRegistration2.value,
       registration3: els.companyRegistration3.value,
-      financialYearStart: els.companyFinancialYearStart.value,
+      financialYearStart: dateInputValue(els.companyFinancialYearStart),
       gstEnabled: els.companyGstEnabled.checked
     });
     await refreshSnapshot();
-    els.reportFromDate.value = financialYearStartIso(state.company.financialYearStart);
+    setDateInputValue(els.reportFromDate, financialYearStartIso(state.company.financialYearStart));
     showToast('Configuration saved.');
   });
   els.newCompany.addEventListener('click', () => createNewCompany().catch((error) => showToast(error.message)));
@@ -1999,6 +2022,7 @@ function bindEvents() {
     event.preventDefault();
     await dbCall('importData', await parseBackupFile(els.importFile.files[0], els.importPassword.value));
     els.importForm.reset();
+    state.reportDatesInitialized = false;
     await refreshSnapshot();
     showToast('Backup imported.');
   });
@@ -2047,14 +2071,24 @@ async function prepareServiceWorker() {
 
 async function boot() {
   document.documentElement.lang = appLocale;
-  document.querySelectorAll('input[type="date"]').forEach((input) => input.setAttribute('lang', appLocale));
+  document.querySelectorAll('.date-input').forEach((input) => {
+    input.addEventListener('blur', () => {
+      if (!input.value) return;
+      try {
+        setDateInputValue(input, dateInputValue(input));
+        input.setCustomValidity('');
+      } catch (error) {
+        input.setCustomValidity(error.message);
+      }
+    });
+    input.addEventListener('input', () => input.setCustomValidity(''));
+  });
   renderStateOptions(els.accountState);
   renderStateOptions(els.companyState);
   bindEvents();
-  els.voucherDate.value = todayIso();
-  els.reportFromDate.value = `${todayIso().slice(0, 4)}-01-01`;
-  els.reportToDate.value = todayIso();
-  els.reportAsOfDate.value = todayIso();
+  setDateInputValue(els.voucherDate, todayIso());
+  setDateInputValue(els.reportToDate, todayIso());
+  setDateInputValue(els.reportAsOfDate, todayIso());
   setReportType('daybook', false);
   if (!(await prepareServiceWorker())) {
     return;

@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html lang="en-IN">
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -290,7 +290,7 @@
                 </label>
                 <label>
                   Date
-                  <input id="voucherDate" type="date" required>
+                  <input id="voucherDate" class="date-input" inputmode="numeric" placeholder="dd-mm-yyyy" pattern="\d{2}-\d{2}-\d{4}" required>
                 </label>
                 <label>
                   Reference
@@ -302,7 +302,7 @@
                 </label>
                 <label>
                   Invoice Date
-                  <input id="invoiceDate" type="date">
+                  <input id="invoiceDate" class="date-input" inputmode="numeric" placeholder="dd-mm-yyyy" pattern="\d{2}-\d{2}-\d{4}">
                 </label>
                 <label>
                   Narration
@@ -420,15 +420,15 @@
               </fieldset>
               <label id="reportFromField">
                 From
-                <input id="reportFromDate" type="date">
+                <input id="reportFromDate" class="date-input" inputmode="numeric" placeholder="dd-mm-yyyy" pattern="\d{2}-\d{2}-\d{4}">
               </label>
               <label id="reportToField">
                 To
-                <input id="reportToDate" type="date">
+                <input id="reportToDate" class="date-input" inputmode="numeric" placeholder="dd-mm-yyyy" pattern="\d{2}-\d{2}-\d{4}">
               </label>
               <label id="reportAsOfField" class="hidden">
                 As at
-                <input id="reportAsOfDate" type="date">
+                <input id="reportAsOfDate" class="date-input" inputmode="numeric" placeholder="dd-mm-yyyy" pattern="\d{2}-\d{2}-\d{4}">
               </label>
               <div class="report-actions">
                 <button type="submit">Run</button>
@@ -521,7 +521,7 @@
               <label>Government Registration 1<input id="companyRegistration1" autocomplete="off"></label>
               <label>Government Registration 2<input id="companyRegistration2" autocomplete="off"></label>
               <label>Government Registration 3<input id="companyRegistration3" autocomplete="off"></label>
-              <label>Financial Year Start Date<input id="companyFinancialYearStart" type="date" required></label>
+              <label>Financial Year Start Date<input id="companyFinancialYearStart" class="date-input" inputmode="numeric" placeholder="dd-mm-yyyy" pattern="\d{2}-\d{2}-\d{4}" required></label>
               <label class="checkbox-row">
                 <input id="companyGstEnabled" type="checkbox">
                 GST Enabled

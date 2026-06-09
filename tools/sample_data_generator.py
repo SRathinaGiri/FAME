@@ -132,6 +132,7 @@ SERVICE_PRODUCTS = [
 class Config:
     output: Path
     years: int = 3
+    financial_year_start: str = "01-04"
     accounts: int = 60
     products: int = 25
     assets: int = 8
@@ -160,8 +161,18 @@ class Generator:
         self.suppliers: list[dict] = []
         self.products: list[dict] = []
         self.fixed_assets: list[dict] = []
+        try:
+            fy_day, fy_month = (int(part) for part in config.financial_year_start.split("-", 1))
+            date(2001, fy_month, fy_day)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Financial year start must be a valid dd-mm value, for example 01-04.") from exc
+        self.fy_day = fy_day
+        self.fy_month = fy_month
         today = date.today()
-        self.start_date = date(today.year - config.years + 1, 4, 1)
+        current_fy_start = date(today.year, self.fy_month, self.fy_day)
+        if today < current_fy_start:
+            current_fy_start = date(today.year - 1, self.fy_month, self.fy_day)
+        self.start_date = date(current_fy_start.year - config.years + 1, self.fy_month, self.fy_day)
         self.end_date = today
 
     def uid(self) -> str:
@@ -172,7 +183,7 @@ class Generator:
         return self.start_date + timedelta(days=self.random.randint(0, max(days, 1)))
 
     def fy_code(self, value: date) -> str:
-        start_year = value.year if value >= date(value.year, 4, 1) else value.year - 1
+        start_year = value.year if value >= date(value.year, self.fy_month, self.fy_day) else value.year - 1
         return f"{str(start_year)[-2:]}{str(start_year + 1)[-2:]}"
 
     def voucher_no(self, voucher_type: str, value: date) -> str:
@@ -288,7 +299,7 @@ class Generator:
             "registration_1": "CIN-U52300TN2021PTC123456",
             "registration_2": "MSME-UDYAM-TN-02-0001234",
             "registration_3": "",
-            "financial_year_start": f"{self.start_date.year}-04-01",
+            "financial_year_start": self.start_date.isoformat(),
             "gst_enabled": 1 if self.config.gst_enabled else 0,
             "updated_at": self.now,
         })
@@ -533,6 +544,7 @@ class App(Tk):
         default_output = Path.cwd() / "fame-electronics-sample.json"
         self.output = StringVar(value=str(default_output))
         self.years = IntVar(value=3)
+        self.financial_year_start = StringVar(value="01-04")
         self.accounts = IntVar(value=80)
         self.products = IntVar(value=30)
         self.assets = IntVar(value=10)
@@ -547,6 +559,7 @@ class App(Tk):
         frame.grid(row=0, column=0)
         fields = [
             ("Years", self.years),
+            ("FY Start (dd-mm)", self.financial_year_start),
             ("Accounts", self.accounts),
             ("Products", self.products),
             ("Fixed Assets", self.assets),
@@ -556,13 +569,13 @@ class App(Tk):
         for row, (label, var) in enumerate(fields):
             ttk.Label(frame, text=label).grid(row=row, column=0, sticky="w", pady=4)
             ttk.Entry(frame, textvariable=var, width=18).grid(row=row, column=1, sticky="ew", pady=4)
-        ttk.Label(frame, text="Output JSON").grid(row=6, column=0, sticky="w", pady=4)
-        ttk.Entry(frame, textvariable=self.output, width=48).grid(row=6, column=1, sticky="ew", pady=4)
-        ttk.Button(frame, text="Browse", command=self.browse).grid(row=6, column=2, padx=6)
-        ttk.Label(frame, text="Encrypt Password").grid(row=7, column=0, sticky="w", pady=4)
-        ttk.Entry(frame, textvariable=self.password, width=18, show="*").grid(row=7, column=1, sticky="ew", pady=4)
-        ttk.Checkbutton(frame, text="GST enabled", variable=self.gst_enabled).grid(row=8, column=1, sticky="w", pady=4)
-        ttk.Button(frame, text="Generate", command=self.run_generate).grid(row=9, column=1, sticky="e", pady=(12, 0))
+        ttk.Label(frame, text="Output JSON").grid(row=7, column=0, sticky="w", pady=4)
+        ttk.Entry(frame, textvariable=self.output, width=48).grid(row=7, column=1, sticky="ew", pady=4)
+        ttk.Button(frame, text="Browse", command=self.browse).grid(row=7, column=2, padx=6)
+        ttk.Label(frame, text="Encrypt Password").grid(row=8, column=0, sticky="w", pady=4)
+        ttk.Entry(frame, textvariable=self.password, width=18, show="*").grid(row=8, column=1, sticky="ew", pady=4)
+        ttk.Checkbutton(frame, text="GST enabled", variable=self.gst_enabled).grid(row=9, column=1, sticky="w", pady=4)
+        ttk.Button(frame, text="Generate", command=self.run_generate).grid(row=10, column=1, sticky="e", pady=(12, 0))
 
     def browse(self) -> None:
         filename = filedialog.asksaveasfilename(
@@ -578,6 +591,7 @@ class App(Tk):
             generate(Config(
                 output=Path(self.output.get()),
                 years=int(self.years.get()),
+                financial_year_start=self.financial_year_start.get(),
                 accounts=int(self.accounts.get()),
                 products=int(self.products.get()),
                 assets=int(self.assets.get()),
@@ -596,6 +610,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--no-gui", action="store_true", help="Run in CLI mode.")
     parser.add_argument("--output", default="fame-electronics-sample.json")
     parser.add_argument("--years", type=int, default=3)
+    parser.add_argument("--financial-year-start", default="01-04", help="Financial year start in dd-mm format.")
     parser.add_argument("--accounts", type=int, default=80)
     parser.add_argument("--products", type=int, default=30)
     parser.add_argument("--assets", type=int, default=10)
@@ -614,6 +629,7 @@ def main(argv: list[str]) -> int:
     generate(Config(
         output=Path(args.output),
         years=args.years,
+        financial_year_start=args.financial_year_start,
         accounts=args.accounts,
         products=args.products,
         assets=args.assets,
