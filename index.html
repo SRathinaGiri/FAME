@@ -272,7 +272,10 @@
           <section class="panel">
             <div class="panel-heading">
               <h2>Voucher Entry</h2>
-              <span id="voucherBalance" class="pill">Balanced</span>
+              <div class="heading-actions">
+                <button id="backToReport" type="button" class="secondary hidden">Back to Report</button>
+                <span id="voucherBalance" class="pill">Balanced</span>
+              </div>
             </div>
             <form id="voucherForm" class="voucher-form">
               <div class="form-grid compact">
@@ -389,7 +392,7 @@
         </section>
 
         <section class="view" id="reportsView">
-          <section class="panel report-panel">
+          <section id="reportPanel" class="panel report-panel">
             <div class="report-tabs" role="tablist" aria-label="Reports">
               <button class="report-tab active" type="button" data-report="daybook">Daybook</button>
               <button class="report-tab" type="button" data-report="ledger">Ledger</button>
@@ -453,7 +456,7 @@
                 <h2 id="drilldownTitle">Account Transactions</h2>
                 <p id="drilldownMeta" class="muted-text"></p>
               </div>
-              <button id="closeDrilldown" type="button" class="secondary">Close</button>
+              <button id="closeDrilldown" type="button" class="secondary">Back to Report</button>
             </div>
             <div id="drilldownContent" class="report-content"></div>
           </section>

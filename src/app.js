@@ -62,6 +62,7 @@ const state = {
   activeReport: 'daybook',
   reportExport: null,
   reportDatesInitialized: false,
+  voucherReportReturn: null,
   serviceWorkerReloaded: sessionStorage.getItem('fame-sw-reloaded') === '1',
   installPrompt: null
 };
@@ -191,6 +192,7 @@ const els = {
   invoiceIgstTotal: document.querySelector('#invoiceIgstTotal'),
   invoiceGrandTotal: document.querySelector('#invoiceGrandTotal'),
   voucherBalance: document.querySelector('#voucherBalance'),
+  backToReport: document.querySelector('#backToReport'),
   addLine: document.querySelector('#addLine'),
   deleteVoucher: document.querySelector('#deleteVoucher'),
   clearVoucher: document.querySelector('#clearVoucher'),
@@ -272,6 +274,44 @@ function dateInputValue(input) {
 
 function setDateInputValue(input, isoValue) {
   input.value = isoValue ? formatDate(isoValue) : '';
+  const picker = input.parentElement?.querySelector('.calendar-native');
+  if (picker) picker.value = isoValue || '';
+}
+
+function installCalendarPicker(input) {
+  const wrapper = document.createElement('div');
+  wrapper.className = 'date-control';
+  input.parentNode.insertBefore(wrapper, input);
+  wrapper.append(input);
+
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'calendar-button secondary';
+  button.setAttribute('aria-label', `Open calendar for ${input.closest('label')?.childNodes[0]?.textContent.trim() || 'date'}`);
+  button.textContent = 'Calendar';
+
+  const picker = document.createElement('input');
+  picker.type = 'date';
+  picker.className = 'calendar-native';
+  picker.tabIndex = -1;
+  picker.setAttribute('aria-hidden', 'true');
+
+  button.addEventListener('click', () => {
+    try {
+      picker.value = dateInputValue(input);
+    } catch {
+      picker.value = '';
+    }
+    if (typeof picker.showPicker === 'function') picker.showPicker();
+    else picker.click();
+  });
+  picker.addEventListener('change', () => {
+    setDateInputValue(input, picker.value);
+    input.setCustomValidity('');
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+  });
+
+  wrapper.append(button, picker);
 }
 
 function todayIso() {
@@ -727,6 +767,8 @@ function bindReportLinks(container) {
   });
   container.querySelectorAll('.voucher-link').forEach((button) => {
     button.addEventListener('click', () => {
+      state.voucherReportReturn = els.reportDrilldown.contains(button) ? 'drilldown' : 'report';
+      els.backToReport.classList.remove('hidden');
       fillVoucherForm(button.dataset.voucherId);
       switchView('entries');
     });
@@ -1800,6 +1842,27 @@ function switchView(viewName) {
   if (viewName === 'reports') runReport().catch((error) => showToast(error.message));
 }
 
+function returnFromVoucherDrilldown() {
+  const returnTarget = state.voucherReportReturn;
+  state.voucherReportReturn = null;
+  els.backToReport.classList.add('hidden');
+  els.navTabs.forEach((tab) => tab.classList.toggle('active', tab.dataset.view === 'reports'));
+  els.views.forEach((view) => view.classList.toggle('active', view.id === 'reportsView'));
+  els.viewTitle.textContent = 'Reports';
+  if (returnTarget === 'drilldown') {
+    els.reportDrilldown.classList.remove('hidden');
+    els.reportDrilldown.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  } else {
+    els.reportDrilldown.classList.add('hidden');
+    document.querySelector('#reportPanel').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+}
+
+function closeAccountDrilldown() {
+  els.reportDrilldown.classList.add('hidden');
+  document.querySelector('#reportPanel').scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
 function downloadJson(filename, data) {
   const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
   const url = URL.createObjectURL(blob);
@@ -1890,7 +1953,11 @@ async function deleteCoaForm(level) {
 }
 
 function bindEvents() {
-  els.navTabs.forEach((tab) => tab.addEventListener('click', () => switchView(tab.dataset.view)));
+  els.navTabs.forEach((tab) => tab.addEventListener('click', () => {
+    state.voucherReportReturn = null;
+    els.backToReport.classList.add('hidden');
+    switchView(tab.dataset.view);
+  }));
   els.reportTabs.forEach((tab) => tab.addEventListener('click', () => setReportType(tab.dataset.report)));
   els.reportTagModes.forEach((input) => input.addEventListener('change', () => {
     if (state.activeReport === 'tag') runReport().catch((error) => showToast(error.message));
@@ -1913,7 +1980,8 @@ function bindEvents() {
         : 'No outstanding depreciation to post.'
     );
   });
-  els.closeDrilldown.addEventListener('click', () => els.reportDrilldown.classList.add('hidden'));
+  els.closeDrilldown.addEventListener('click', closeAccountDrilldown);
+  els.backToReport.addEventListener('click', returnFromVoucherDrilldown);
   els.headType.addEventListener('change', () => suggestCode('head', coaForms.head()).catch(() => undefined));
   els.subheadType.addEventListener('change', () => {
     renderHeadOptions(els.subheadHead, els.subheadType.value);
@@ -2117,6 +2185,7 @@ async function prepareServiceWorker() {
 async function boot() {
   document.documentElement.lang = appLocale;
   document.querySelectorAll('.date-input').forEach((input) => {
+    installCalendarPicker(input);
     input.addEventListener('blur', () => {
       if (!input.value) return;
       try {

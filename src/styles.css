@@ -234,6 +234,38 @@ h2 {
   border-bottom: 1px solid var(--line);
 }
 
+.heading-actions,
+.date-control {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.date-control {
+  position: relative;
+}
+
+.date-control > .date-input {
+  min-width: 0;
+  flex: 1;
+}
+
+.calendar-button {
+  min-height: 42px;
+  padding: 0 10px;
+  font-size: 12px;
+}
+
+.calendar-native {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 86px;
+  height: 42px;
+  opacity: 0;
+  pointer-events: none;
+}
+
 .table-wrap {
   overflow-x: auto;
 }
