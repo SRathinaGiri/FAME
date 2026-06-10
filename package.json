@@ -1,7 +1,7 @@
 {
   "name": "fame",
   "version": "0.1.0",
-  "description": "F.A.M.E - Financial Accounting under Mobile Environment",
+  "description": "F.A.M.E - Financial Accounting under Modern Environment",
   "type": "module",
   "scripts": {
     "dev": "vite --host 127.0.0.1",

@@ -1,6 +1,6 @@
 # F.A.M.E
 
-Financial Accounting under Mobile Environment.
+Financial Accounting under Modern Environment.
 
 F.A.M.E is a local-first accounting PWA built as a self-contained browser app. The first module includes:
 
