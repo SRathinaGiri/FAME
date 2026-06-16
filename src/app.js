@@ -4,7 +4,7 @@ import { decryptBackup, encryptBackup } from './crypto.js';
 const moneyFormatter = new Intl.NumberFormat('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const quantityFormatter = new Intl.NumberFormat('en-IN', { maximumFractionDigits: 3 });
 const appLocale = 'en-IN';
-const APP_VERSION = 'v24';
+const APP_VERSION = 'v25';
 const indiaStates = [
   ['AP', 'Andhra Pradesh'],
   ['AR', 'Arunachal Pradesh'],
@@ -49,6 +49,8 @@ const state = {
   heads: [],
   subheads: [],
   accounts: [],
+  productCategories: [],
+  productSubcategories: [],
   products: [],
   fixedAssets: [],
   hasTransactions: false,
@@ -75,6 +77,8 @@ const els = {
   companyDisplay: document.querySelector('#companyDisplay'),
   viewTitle: document.querySelector('#viewTitle'),
   navTabs: document.querySelectorAll('.nav-tab'),
+  reportNavGroup: document.querySelector('#reportNavGroup'),
+  reportNavItems: document.querySelectorAll('.nav-subtab'),
   views: document.querySelectorAll('.view'),
   totalDebit: document.querySelector('#totalDebit'),
   totalCredit: document.querySelector('#totalCredit'),
@@ -148,6 +152,19 @@ const els = {
   drilldownContent: document.querySelector('#drilldownContent'),
   closeDrilldown: document.querySelector('#closeDrilldown'),
   productList: document.querySelector('#productList'),
+  productCategoryList: document.querySelector('#productCategoryList'),
+  productSubcategoryList: document.querySelector('#productSubcategoryList'),
+  productCategoryForm: document.querySelector('#productCategoryForm'),
+  productCategoryId: document.querySelector('#productCategoryId'),
+  productCategoryName: document.querySelector('#productCategoryName'),
+  deleteProductCategory: document.querySelector('#deleteProductCategory'),
+  clearProductCategory: document.querySelector('#clearProductCategory'),
+  productSubcategoryForm: document.querySelector('#productSubcategoryForm'),
+  productSubcategoryId: document.querySelector('#productSubcategoryId'),
+  productSubcategoryCategory: document.querySelector('#productSubcategoryCategory'),
+  productSubcategoryName: document.querySelector('#productSubcategoryName'),
+  deleteProductSubcategory: document.querySelector('#deleteProductSubcategory'),
+  clearProductSubcategory: document.querySelector('#clearProductSubcategory'),
   productForm: document.querySelector('#productForm'),
   productId: document.querySelector('#productId'),
   productName: document.querySelector('#productName'),
@@ -694,20 +711,99 @@ function renderCompanyMaster() {
 function clearProductForm() {
   els.productForm.reset();
   els.productId.value = '';
-  els.productCategory.value = '';
-  els.productSubcategory.value = '';
   els.productOpeningQuantity.value = '0';
   els.productOpeningValue.value = '';
   els.productGstRate.value = '0';
   els.productItcAvailable.checked = true;
   els.deleteProduct.disabled = true;
   renderProductKindFields();
+  renderProductCategoryOptions();
+}
+
+function clearProductCategoryForm() {
+  els.productCategoryForm.reset();
+  els.productCategoryId.value = '';
+  els.deleteProductCategory.disabled = true;
+}
+
+function clearProductSubcategoryForm() {
+  els.productSubcategoryForm.reset();
+  els.productSubcategoryId.value = '';
+  renderOptions(els.productSubcategoryCategory, state.productCategories, { label: (category) => category.name });
+  els.deleteProductSubcategory.disabled = true;
 }
 
 function renderProductKindFields() {
+  const isProduct = els.productKind.value === 'product';
   document.querySelectorAll('.product-stock-field').forEach((element) => {
-    element.classList.toggle('hidden', els.productKind.value !== 'product');
+    element.classList.toggle('hidden', !isProduct);
+    element.querySelectorAll('input, select').forEach((control) => {
+      control.disabled = !isProduct;
+    });
   });
+}
+
+function productSubcategoriesForCategory(categoryId = els.productCategory.value) {
+  return state.productSubcategories.filter((subcategory) => subcategory.categoryId === categoryId);
+}
+
+function renderProductCategoryOptions(selectedCategoryId = els.productCategory.value, selectedSubcategoryId = els.productSubcategory.value) {
+  renderOptions(els.productCategory, state.productCategories, { label: (category) => category.name, empty: 'Select category' });
+  if (state.productCategories.some((category) => category.id === selectedCategoryId)) {
+    els.productCategory.value = selectedCategoryId;
+  } else if (state.productCategories.length) {
+    els.productCategory.value = state.productCategories[0].id;
+  }
+  const subcategories = productSubcategoriesForCategory(els.productCategory.value);
+  renderOptions(els.productSubcategory, subcategories, { label: (subcategory) => subcategory.name, empty: 'Select sub-category' });
+  if (subcategories.some((subcategory) => subcategory.id === selectedSubcategoryId)) {
+    els.productSubcategory.value = selectedSubcategoryId;
+  } else if (subcategories.length) {
+    els.productSubcategory.value = subcategories[0].id;
+  }
+}
+
+function renderProductCategoryMasters() {
+  els.productCategoryList.innerHTML = state.productCategories.length
+    ? `<div class="list-heading">Product Categories</div>${state.productCategories.map((category) => `
+        <button class="product-row compact-row" type="button" data-category-id="${category.id}">
+          <strong>${escapeHtml(category.name)}</strong>
+          <span>${state.productSubcategories.filter((subcategory) => subcategory.categoryId === category.id).length} sub-categories</span>
+        </button>
+      `).join('')}`
+    : '<div class="empty-list">No product categories created yet.</div>';
+  els.productCategoryList.querySelectorAll('[data-category-id]').forEach((button) => {
+    button.addEventListener('click', () => {
+      const category = state.productCategories.find((item) => item.id === button.dataset.categoryId);
+      if (!category) return;
+      els.productCategoryId.value = category.id;
+      els.productCategoryName.value = category.name;
+      els.deleteProductCategory.disabled = false;
+    });
+  });
+
+  els.productSubcategoryList.innerHTML = state.productSubcategories.length
+    ? `<div class="list-heading">Product Sub-categories</div>${state.productSubcategories.map((subcategory) => `
+        <button class="product-row compact-row" type="button" data-subcategory-id="${subcategory.id}">
+          <strong>${escapeHtml(subcategory.name)}</strong>
+          <span>${escapeHtml(subcategory.categoryName)}</span>
+        </button>
+      `).join('')}`
+    : '<div class="empty-list">No product sub-categories created yet.</div>';
+  els.productSubcategoryList.querySelectorAll('[data-subcategory-id]').forEach((button) => {
+    button.addEventListener('click', () => {
+      const subcategory = state.productSubcategories.find((item) => item.id === button.dataset.subcategoryId);
+      if (!subcategory) return;
+      els.productSubcategoryId.value = subcategory.id;
+      renderOptions(els.productSubcategoryCategory, state.productCategories, { label: (category) => category.name });
+      els.productSubcategoryCategory.value = subcategory.categoryId;
+      els.productSubcategoryName.value = subcategory.name;
+      els.deleteProductSubcategory.disabled = false;
+    });
+  });
+  if (!els.productCategoryId.value) els.deleteProductCategory.disabled = true;
+  if (!els.productSubcategoryId.value) els.deleteProductSubcategory.disabled = true;
+  renderOptions(els.productSubcategoryCategory, state.productCategories, { label: (category) => category.name });
 }
 
 function renderProductMaster() {
@@ -715,10 +811,14 @@ function renderProductMaster() {
   const salesAccounts = state.accounts.filter((account) => account.typeId === 'income' && !account.isSystem);
   const selectedPurchase = els.productPurchaseAccount.value;
   const selectedSales = els.productSalesAccount.value;
+  const selectedCategory = els.productCategory.value;
+  const selectedSubcategory = els.productSubcategory.value;
   document.querySelectorAll('.product-gst-field').forEach((element) => {
     element.classList.toggle('hidden', !state.company.gstEnabled);
   });
   renderProductKindFields();
+  renderProductCategoryMasters();
+  renderProductCategoryOptions(selectedCategory, selectedSubcategory);
   renderOptions(els.productPurchaseAccount, purchaseAccounts, { label: accountLabel });
   renderOptions(els.productSalesAccount, salesAccounts, { label: accountLabel });
   if (purchaseAccounts.some((account) => account.id === selectedPurchase)) els.productPurchaseAccount.value = selectedPurchase;
@@ -742,8 +842,7 @@ function renderProductMaster() {
       els.productId.value = product.id;
       els.productName.value = product.name;
       els.productKind.value = product.kind;
-      els.productCategory.value = product.categoryName || '';
-      els.productSubcategory.value = product.subcategoryName || '';
+      renderProductCategoryOptions(product.categoryId || '', product.subcategoryId || '');
       els.productOpeningQuantity.value = product.openingQuantity || '0';
       els.productOpeningValue.value = product.openingValueMinor ? minorToMoney(product.openingValueMinor) : '';
       els.productHsnSac.value = product.hsnSacCode || '';
@@ -1610,6 +1709,7 @@ async function runReport() {
 function setReportType(type, run = true) {
   state.activeReport = type;
   els.reportTabs.forEach((tab) => tab.classList.toggle('active', tab.dataset.report === type));
+  els.reportNavItems.forEach((tab) => tab.classList.toggle('active', tab.dataset.report === type));
   const isLedger = type === 'ledger';
   const isAsOfReport = ['balanceSheet', 'trialBalance', 'fixedAssetRegister', 'fixedAssetSchedule'].includes(type);
   const isTag = type === 'tag';
@@ -2053,6 +2153,8 @@ async function refreshSnapshot() {
     heads: snapshot.heads || [],
     subheads: snapshot.subheads || [],
     accounts: snapshot.accounts || [],
+    productCategories: snapshot.productCategories || [],
+    productSubcategories: snapshot.productSubcategories || [],
     products: snapshot.products || [],
     fixedAssets: snapshot.fixedAssets || [],
     hasTransactions: Boolean(snapshot.hasTransactions),
@@ -2096,6 +2198,7 @@ function switchView(viewName) {
   els.navTabs.forEach((tab) => tab.classList.toggle('active', tab.dataset.view === viewName));
   els.views.forEach((view) => view.classList.toggle('active', view.id === `${viewName}View`));
   els.viewTitle.textContent = [...els.navTabs].find((tab) => tab.dataset.view === viewName)?.textContent || 'F.A.M.E';
+  if (els.reportNavGroup) els.reportNavGroup.open = viewName === 'reports' || els.reportNavGroup.open;
   if (viewName === 'reports') runReport().catch((error) => showToast(error.message));
 }
 
@@ -2217,6 +2320,12 @@ function bindEvents() {
     state.voucherReportReturn = null;
     els.backToReport.classList.add('hidden');
     switchView(tab.dataset.view);
+  }));
+  els.reportNavItems.forEach((tab) => tab.addEventListener('click', () => {
+    state.voucherReportReturn = null;
+    els.backToReport.classList.add('hidden');
+    switchView('reports');
+    setReportType(tab.dataset.report);
   }));
   els.reportTabs.forEach((tab) => tab.addEventListener('click', () => setReportType(tab.dataset.report)));
   els.reportTagModes.forEach((input) => input.addEventListener('change', () => {
@@ -2348,8 +2457,8 @@ function bindEvents() {
       id: els.productId.value || null,
       name: els.productName.value,
       kind: els.productKind.value,
-      categoryName: els.productCategory.value,
-      subcategoryName: els.productSubcategory.value,
+      categoryId: els.productCategory.value,
+      subcategoryId: els.productSubcategory.value,
       openingQuantity: els.productOpeningQuantity.value,
       openingValueMinor: moneyToMinor(els.productOpeningValue.value),
       hsnSacCode: els.productHsnSac.value,
@@ -2363,6 +2472,44 @@ function bindEvents() {
     showToast('Product / service saved.');
   });
   els.productKind.addEventListener('change', renderProductKindFields);
+  els.productCategory.addEventListener('change', () => renderProductCategoryOptions(els.productCategory.value, ''));
+  els.productCategoryForm.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    await dbCall('saveProductCategory', {
+      id: els.productCategoryId.value || null,
+      name: els.productCategoryName.value
+    });
+    clearProductCategoryForm();
+    await refreshSnapshot();
+    showToast('Product category saved.');
+  });
+  els.clearProductCategory.addEventListener('click', clearProductCategoryForm);
+  els.deleteProductCategory.addEventListener('click', async () => {
+    if (!els.productCategoryId.value) return showToast('Select a product category first.');
+    await dbCall('deleteProductCategory', { id: els.productCategoryId.value });
+    clearProductCategoryForm();
+    await refreshSnapshot();
+    showToast('Product category deleted.');
+  });
+  els.productSubcategoryForm.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    await dbCall('saveProductSubcategory', {
+      id: els.productSubcategoryId.value || null,
+      categoryId: els.productSubcategoryCategory.value,
+      name: els.productSubcategoryName.value
+    });
+    clearProductSubcategoryForm();
+    await refreshSnapshot();
+    showToast('Product sub-category saved.');
+  });
+  els.clearProductSubcategory.addEventListener('click', clearProductSubcategoryForm);
+  els.deleteProductSubcategory.addEventListener('click', async () => {
+    if (!els.productSubcategoryId.value) return showToast('Select a product sub-category first.');
+    await dbCall('deleteProductSubcategory', { id: els.productSubcategoryId.value });
+    clearProductSubcategoryForm();
+    await refreshSnapshot();
+    showToast('Product sub-category deleted.');
+  });
   els.clearProduct.addEventListener('click', clearProductForm);
   els.deleteProduct.addEventListener('click', async () => {
     if (!els.productId.value) return showToast('Select a product or service first.');

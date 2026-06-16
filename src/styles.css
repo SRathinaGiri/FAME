@@ -113,7 +113,21 @@ button.danger:hover {
   gap: 8px;
 }
 
-.nav-tab {
+.nav-group {
+  margin: 0;
+}
+
+.nav-group summary {
+  display: block;
+  list-style: none;
+}
+
+.nav-group summary::-webkit-details-marker {
+  display: none;
+}
+
+.nav-tab,
+.nav-subtab {
   justify-content: flex-start;
   width: 100%;
   background: transparent;
@@ -122,8 +136,27 @@ button.danger:hover {
 }
 
 .nav-tab.active,
-.nav-tab:hover {
+.nav-tab:hover,
+.nav-subtab.active,
+.nav-subtab:hover {
   background: rgba(255, 255, 255, 0.12);
+}
+
+.nav-subtabs {
+  display: grid;
+  gap: 4px;
+  margin-top: 4px;
+  padding-left: 18px;
+  border-left: 1px solid rgba(255, 255, 255, 0.16);
+}
+
+.nav-subtab {
+  min-height: 32px;
+  padding: 0 10px;
+  border-radius: 6px;
+  color: #b6c5d8;
+  font-size: 12px;
+  font-weight: 700;
 }
 
 .storage-status {
@@ -456,6 +489,18 @@ textarea {
 .product-row span {
   color: var(--muted);
   font-size: 12px;
+}
+
+.compact-row {
+  padding: 9px 12px;
+}
+
+.list-heading {
+  padding: 10px 18px 6px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+  text-transform: uppercase;
 }
 
 .tag-chip {
@@ -838,6 +883,21 @@ textarea {
   }
 
   .nav-tab {
+    justify-content: center;
+    min-height: 38px;
+    padding: 0 8px;
+    text-align: center;
+    font-size: 13px;
+  }
+
+  .nav-subtabs {
+    grid-column: 1 / -1;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    padding-left: 0;
+    border-left: 0;
+  }
+
+  .nav-subtab {
     justify-content: center;
     min-height: 38px;
     padding: 0 8px;

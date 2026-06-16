@@ -12,6 +12,8 @@ const TABLES = [
   'subhead_accounts',
   'accounts',
   'company_master',
+  'product_categories',
+  'product_subcategories',
   'products',
   'fixed_assets',
   'tags',
@@ -233,10 +235,26 @@ function ensureSchema() {
       stock_valuation_method TEXT NOT NULL DEFAULT 'weighted_average',
       updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
+    CREATE TABLE IF NOT EXISTS product_categories (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL COLLATE NOCASE UNIQUE,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE TABLE IF NOT EXISTS product_subcategories (
+      id TEXT PRIMARY KEY,
+      category_id TEXT NOT NULL REFERENCES product_categories(id) ON DELETE RESTRICT,
+      name TEXT NOT NULL COLLATE NOCASE,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE (category_id, name)
+    );
     CREATE TABLE IF NOT EXISTS products (
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL COLLATE NOCASE UNIQUE,
       kind TEXT NOT NULL CHECK (kind IN ('product','service')),
+      category_id TEXT REFERENCES product_categories(id) ON DELETE RESTRICT,
+      subcategory_id TEXT REFERENCES product_subcategories(id) ON DELETE RESTRICT,
       category_name TEXT NOT NULL DEFAULT '',
       subcategory_name TEXT NOT NULL DEFAULT '',
       opening_quantity REAL NOT NULL DEFAULT 0 CHECK (opening_quantity >= 0),
@@ -333,6 +351,8 @@ function ensureSchema() {
     CREATE INDEX IF NOT EXISTS idx_heads_type ON head_accounts(type_id);
     CREATE INDEX IF NOT EXISTS idx_subheads_head ON subhead_accounts(head_id);
     CREATE INDEX IF NOT EXISTS idx_accounts_subhead ON accounts(subhead_id);
+    CREATE INDEX IF NOT EXISTS idx_product_subcategories_category ON product_subcategories(category_id);
+    CREATE INDEX IF NOT EXISTS idx_products_subcategory ON products(subcategory_id);
     CREATE INDEX IF NOT EXISTS idx_voucher_lines_voucher ON voucher_lines(voucher_id);
     CREATE INDEX IF NOT EXISTS idx_voucher_lines_account ON voucher_lines(account_id);
     CREATE INDEX IF NOT EXISTS idx_voucher_items_voucher ON voucher_items(voucher_id);
@@ -357,6 +377,8 @@ function addColumnIfMissing(table, column, definition) {
 function migrateSchema() {
   addColumnIfMissing('accounts', 'opening_balance_minor', 'INTEGER NOT NULL DEFAULT 0');
   addColumnIfMissing('company_master', 'stock_valuation_method', "TEXT NOT NULL DEFAULT 'weighted_average'");
+  addColumnIfMissing('products', 'category_id', 'TEXT REFERENCES product_categories(id) ON DELETE RESTRICT');
+  addColumnIfMissing('products', 'subcategory_id', 'TEXT REFERENCES product_subcategories(id) ON DELETE RESTRICT');
   addColumnIfMissing('products', 'category_name', "TEXT NOT NULL DEFAULT ''");
   addColumnIfMissing('products', 'subcategory_name', "TEXT NOT NULL DEFAULT ''");
   addColumnIfMissing('products', 'opening_quantity', 'REAL NOT NULL DEFAULT 0');
@@ -365,6 +387,7 @@ function migrateSchema() {
     INSERT INTO settings (key, value) VALUES (?, ?)
     ON CONFLICT(key) DO UPDATE SET value = excluded.value
   `, ['schema_version', String(SCHEMA_VERSION)]);
+  ensureProductCategoryMasters();
 }
 
 function ensureSystemAccounts() {
@@ -379,6 +402,54 @@ function ensureSystemAccounts() {
       ]);
     }
   });
+}
+
+function ensureProductCategoryMastersData() {
+    let general = one('SELECT id FROM product_categories WHERE name = ?', ['General']);
+    if (!general) {
+      const id = crypto.randomUUID();
+      exec('INSERT INTO product_categories (id, name) VALUES (?, ?)', [id, 'General']);
+      general = { id };
+    }
+    let generalSubcategory = one('SELECT id FROM product_subcategories WHERE category_id = ? AND name = ?', [general.id, 'General']);
+    if (!generalSubcategory) {
+      const id = crypto.randomUUID();
+      exec('INSERT INTO product_subcategories (id, category_id, name) VALUES (?, ?, ?)', [id, general.id, 'General']);
+      generalSubcategory = { id };
+    }
+
+    const products = all(`
+      SELECT id, category_name AS categoryName, subcategory_name AS subcategoryName,
+             category_id AS categoryId, subcategory_id AS subcategoryId
+      FROM products
+      WHERE kind = 'product'
+    `);
+    for (const product of products) {
+      if (product.categoryId && product.subcategoryId) continue;
+      const categoryName = String(product.categoryName || '').trim() || 'General';
+      const subcategoryName = String(product.subcategoryName || '').trim() || 'General';
+      let category = one('SELECT id FROM product_categories WHERE name = ?', [categoryName]);
+      if (!category) {
+        const id = crypto.randomUUID();
+        exec('INSERT INTO product_categories (id, name) VALUES (?, ?)', [id, categoryName]);
+        category = { id };
+      }
+      let subcategory = one('SELECT id FROM product_subcategories WHERE category_id = ? AND name = ?', [category.id, subcategoryName]);
+      if (!subcategory) {
+        const id = crypto.randomUUID();
+        exec('INSERT INTO product_subcategories (id, category_id, name) VALUES (?, ?, ?)', [id, category.id, subcategoryName]);
+        subcategory = { id };
+      }
+      exec(`
+        UPDATE products
+        SET category_id = ?, subcategory_id = ?, category_name = ?, subcategory_name = ?
+        WHERE id = ?
+      `, [category.id, subcategory.id, categoryName, subcategoryName, product.id]);
+    }
+}
+
+function ensureProductCategoryMasters() {
+  transaction(ensureProductCategoryMastersData);
 }
 
 function seedDatabase() {
@@ -411,6 +482,7 @@ async function resetCompanyData() {
     exec('PRAGMA foreign_keys = ON');
   }
   seedDatabase();
+  ensureProductCategoryMasters();
   await persistIfMirrored();
   return getSnapshot();
 }
@@ -597,29 +669,117 @@ async function saveCompanyMaster(company = {}) {
 function listProducts() {
   return all(`
     SELECT p.id, p.name, p.kind, p.hsn_sac_code AS hsnSacCode, p.gst_rate AS gstRate,
-           p.category_name AS categoryName, p.subcategory_name AS subcategoryName,
+           p.category_id AS categoryId, p.subcategory_id AS subcategoryId,
+           COALESCE(pc.name, p.category_name, '') AS categoryName,
+           COALESCE(ps.name, p.subcategory_name, '') AS subcategoryName,
            p.opening_quantity AS openingQuantity, p.opening_value_minor AS openingValueMinor,
            p.itc_available AS itcAvailable, p.purchase_account_id AS purchaseAccountId,
            pa.code AS purchaseAccountCode, pa.name AS purchaseAccountName,
            p.sales_account_id AS salesAccountId, sa.code AS salesAccountCode,
            sa.name AS salesAccountName
     FROM products p
+    LEFT JOIN product_categories pc ON pc.id = p.category_id
+    LEFT JOIN product_subcategories ps ON ps.id = p.subcategory_id
     JOIN accounts pa ON pa.id = p.purchase_account_id
     JOIN accounts sa ON sa.id = p.sales_account_id
     ORDER BY p.name COLLATE NOCASE
   `);
 }
 
+function listProductCategories() {
+  return all(`
+    SELECT id, name, created_at AS createdAt, updated_at AS updatedAt
+    FROM product_categories
+    ORDER BY name COLLATE NOCASE
+  `);
+}
+
+function listProductSubcategories() {
+  return all(`
+    SELECT ps.id, ps.category_id AS categoryId, ps.name,
+           pc.name AS categoryName, ps.created_at AS createdAt, ps.updated_at AS updatedAt
+    FROM product_subcategories ps
+    JOIN product_categories pc ON pc.id = ps.category_id
+    ORDER BY pc.name COLLATE NOCASE, ps.name COLLATE NOCASE
+  `);
+}
+
+async function saveProductCategory(category = {}) {
+  const name = String(category.name || '').trim();
+  if (!name) throw new Error('Product category name is required.');
+  transaction(() => {
+    if (category.id) {
+      exec('UPDATE product_categories SET name = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?', [name, category.id]);
+    } else {
+      exec('INSERT INTO product_categories (id, name) VALUES (?, ?)', [crypto.randomUUID(), name]);
+    }
+  });
+  await persistIfMirrored();
+  return getSnapshot();
+}
+
+async function deleteProductCategory({ id }) {
+  if (!id) throw new Error('Select a product category first.');
+  if (one('SELECT 1 AS yes FROM product_subcategories WHERE category_id = ? LIMIT 1', [id])) {
+    throw new Error('Cannot delete a category with sub-categories.');
+  }
+  transaction(() => exec('DELETE FROM product_categories WHERE id = ?', [id]));
+  await persistIfMirrored();
+  return getSnapshot();
+}
+
+async function saveProductSubcategory(subcategory = {}) {
+  const name = String(subcategory.name || '').trim();
+  if (!subcategory.categoryId) throw new Error('Select a product category.');
+  if (!name) throw new Error('Product sub-category name is required.');
+  transaction(() => {
+    if (subcategory.id) {
+      exec(`
+        UPDATE product_subcategories
+        SET category_id = ?, name = ?, updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+      `, [subcategory.categoryId, name, subcategory.id]);
+    } else {
+      exec('INSERT INTO product_subcategories (id, category_id, name) VALUES (?, ?, ?)', [
+        crypto.randomUUID(),
+        subcategory.categoryId,
+        name
+      ]);
+    }
+  });
+  await persistIfMirrored();
+  return getSnapshot();
+}
+
+async function deleteProductSubcategory({ id }) {
+  if (!id) throw new Error('Select a product sub-category first.');
+  if (one('SELECT 1 AS yes FROM products WHERE subcategory_id = ? LIMIT 1', [id])) {
+    throw new Error('Cannot delete a sub-category used by a product.');
+  }
+  transaction(() => exec('DELETE FROM product_subcategories WHERE id = ?', [id]));
+  await persistIfMirrored();
+  return getSnapshot();
+}
+
 async function saveProduct(product = {}) {
   const name = String(product.name || '').trim();
   const kind = String(product.kind || '');
-  const categoryName = kind === 'product' ? String(product.categoryName || '').trim() : '';
-  const subcategoryName = kind === 'product' ? String(product.subcategoryName || '').trim() : '';
+  const category = kind === 'product'
+    ? one('SELECT id, name FROM product_categories WHERE id = ?', [product.categoryId])
+    : null;
+  const subcategory = kind === 'product'
+    ? one('SELECT id, category_id AS categoryId, name FROM product_subcategories WHERE id = ?', [product.subcategoryId])
+    : null;
+  const categoryName = kind === 'product' ? String(category?.name || '').trim() : '';
+  const subcategoryName = kind === 'product' ? String(subcategory?.name || '').trim() : '';
   const openingQuantity = kind === 'product' ? Number(product.openingQuantity || 0) : 0;
   const openingValueMinor = kind === 'product' ? Number(product.openingValueMinor || 0) : 0;
   const gstRate = Number(product.gstRate || 0);
   if (!name) throw new Error('Product or service name is required.');
   if (!['product', 'service'].includes(kind)) throw new Error('Select product or service.');
+  if (kind === 'product' && (!category || !subcategory || subcategory.categoryId !== category.id)) {
+    throw new Error('Select a valid product category and sub-category.');
+  }
   if (!product.purchaseAccountId || !product.salesAccountId) throw new Error('Select purchase and sales accounts.');
   if (!Number.isFinite(openingQuantity) || openingQuantity < 0) throw new Error('Enter a valid opening stock quantity.');
   if (!Number.isFinite(openingValueMinor) || openingValueMinor < 0) throw new Error('Enter a valid opening stock value.');
@@ -627,20 +787,22 @@ async function saveProduct(product = {}) {
   transaction(() => {
     if (product.id) {
       exec(`
-        UPDATE products SET name = ?, kind = ?, category_name = ?, subcategory_name = ?,
+        UPDATE products SET name = ?, kind = ?, category_id = ?, subcategory_id = ?,
+          category_name = ?, subcategory_name = ?,
           opening_quantity = ?, opening_value_minor = ?, hsn_sac_code = ?, gst_rate = ?,
           itc_available = ?, purchase_account_id = ?, sales_account_id = ?,
           updated_at = CURRENT_TIMESTAMP WHERE id = ?
-      `, [name, kind, categoryName, subcategoryName, openingQuantity, openingValueMinor, String(product.hsnSacCode || '').trim(), gstRate, product.itcAvailable ? 1 : 0,
+      `, [name, kind, category?.id || null, subcategory?.id || null, categoryName, subcategoryName,
+        openingQuantity, openingValueMinor, String(product.hsnSacCode || '').trim(), gstRate, product.itcAvailable ? 1 : 0,
         product.purchaseAccountId, product.salesAccountId, product.id]);
     } else {
       exec(`
         INSERT INTO products (
-          id, name, kind, category_name, subcategory_name, opening_quantity,
+          id, name, kind, category_id, subcategory_id, category_name, subcategory_name, opening_quantity,
           opening_value_minor, hsn_sac_code, gst_rate, itc_available,
           purchase_account_id, sales_account_id
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `, [crypto.randomUUID(), name, kind, categoryName, subcategoryName, openingQuantity,
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `, [crypto.randomUUID(), name, kind, category?.id || null, subcategory?.id || null, categoryName, subcategoryName, openingQuantity,
         openingValueMinor, String(product.hsnSacCode || '').trim(), gstRate,
         product.itcAvailable ? 1 : 0, product.purchaseAccountId, product.salesAccountId]);
     }
@@ -2287,6 +2449,8 @@ function getSnapshot() {
     subheads: listSubheads(),
     accounts: postingAccounts,
     company: getCompanyMaster(),
+    productCategories: listProductCategories(),
+    productSubcategories: listProductSubcategories(),
     products: listProducts(),
     fixedAssets: listFixedAssets(),
     hasTransactions: Boolean(one('SELECT 1 AS yes FROM vouchers LIMIT 1')),
@@ -2355,13 +2519,22 @@ function replaceData(backup) {
         row.financial_year_start, row.gst_enabled || 0,
         row.stock_valuation_method || 'weighted_average', row.updated_at
       ]);
+      for (const row of backup.data.product_categories || []) exec(`
+        INSERT INTO product_categories (id, name, created_at, updated_at)
+        VALUES (?, ?, ?, ?)
+      `, [row.id, row.name, row.created_at, row.updated_at]);
+      for (const row of backup.data.product_subcategories || []) exec(`
+        INSERT INTO product_subcategories (id, category_id, name, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?)
+      `, [row.id, row.category_id, row.name, row.created_at, row.updated_at]);
       for (const row of backup.data.products || []) exec(`
         INSERT INTO products (
-          id, name, kind, category_name, subcategory_name, opening_quantity,
+          id, name, kind, category_id, subcategory_id, category_name, subcategory_name, opening_quantity,
           opening_value_minor, hsn_sac_code, gst_rate, itc_available,
           purchase_account_id, sales_account_id, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `, [row.id, row.name, row.kind, row.category_name || '', row.subcategory_name || '',
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `, [row.id, row.name, row.kind, row.category_id || null, row.subcategory_id || null,
+        row.category_name || '', row.subcategory_name || '',
         row.opening_quantity || 0, row.opening_value_minor || 0, row.hsn_sac_code, row.gst_rate,
         row.itc_available, row.purchase_account_id, row.sales_account_id,
         row.created_at, row.updated_at]);
@@ -2406,6 +2579,7 @@ function replaceData(backup) {
           adjustmentSubhead.id
         ]);
       }
+      ensureProductCategoryMastersData();
     });
   } finally {
     exec('PRAGMA foreign_keys = ON');
@@ -2431,6 +2605,10 @@ const handlers = {
   deleteVoucher,
   resetCompanyData,
   saveCompanyMaster,
+  saveProductCategory,
+  deleteProductCategory,
+  saveProductSubcategory,
+  deleteProductSubcategory,
   saveProduct,
   deleteProduct,
   reportDaybook,

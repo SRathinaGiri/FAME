@@ -26,7 +26,27 @@
           <button class="nav-tab" data-view="products">Products / Services</button>
           <button class="nav-tab" data-view="fixedAssets">Fixed Assets</button>
           <button class="nav-tab" data-view="entries">Entries</button>
-          <button class="nav-tab" data-view="reports">Reports</button>
+          <details id="reportNavGroup" class="nav-group">
+            <summary>
+              <button class="nav-tab" data-view="reports" type="button">Reports</button>
+            </summary>
+            <div class="nav-subtabs" aria-label="Report navigation">
+              <button class="nav-subtab" type="button" data-report="daybook">Daybook</button>
+              <button class="nav-subtab" type="button" data-report="ledger">Ledger</button>
+              <button class="nav-subtab" type="button" data-report="profitLoss">Profit and Loss</button>
+              <button class="nav-subtab" type="button" data-report="trialBalance">Trial Balance</button>
+              <button class="nav-subtab" type="button" data-report="balanceSheet">Balance Sheet</button>
+              <button class="nav-subtab" type="button" data-report="tag">Tag Report</button>
+              <button class="nav-subtab" type="button" data-report="salesJournal">Sales Journal</button>
+              <button class="nav-subtab" type="button" data-report="purchaseJournal">Purchase Journal</button>
+              <button class="nav-subtab" type="button" data-report="expenseJournal">Expense Journal</button>
+              <button class="nav-subtab" type="button" data-report="incomeJournal">Income Journal</button>
+              <button class="nav-subtab" type="button" data-report="stockSummary">Stock Summary</button>
+              <button class="nav-subtab" type="button" data-report="stockMovement">Stock Movement</button>
+              <button class="nav-subtab" type="button" data-report="fixedAssetRegister">Fixed Asset Register</button>
+              <button class="nav-subtab" type="button" data-report="fixedAssetSchedule">Depreciation Schedule</button>
+            </div>
+          </details>
           <button class="nav-tab" data-view="tags">Tags</button>
           <button class="nav-tab" data-view="configuration">Configuration</button>
           <button class="nav-tab" data-view="backup">Backup</button>
@@ -248,6 +268,29 @@
             <section class="panel">
               <div class="panel-heading"><h2>Product / Service List</h2></div>
               <div id="productList" class="tag-list"></div>
+              <div id="productCategoryList" class="tag-list separated-form"></div>
+              <form id="productCategoryForm" class="form-grid separated-form">
+                <input id="productCategoryId" type="hidden">
+                <h3>Product Category</h3>
+                <label>Name<input id="productCategoryName" required autocomplete="off" placeholder="Raw Materials"></label>
+                <div class="action-row">
+                  <button type="submit">Save Category</button>
+                  <button id="deleteProductCategory" type="button" class="secondary">Delete</button>
+                  <button id="clearProductCategory" type="button" class="secondary">Clear</button>
+                </div>
+              </form>
+              <div id="productSubcategoryList" class="tag-list separated-form"></div>
+              <form id="productSubcategoryForm" class="form-grid separated-form">
+                <input id="productSubcategoryId" type="hidden">
+                <h3>Product Sub-category</h3>
+                <label>Category<select id="productSubcategoryCategory" required></select></label>
+                <label>Name<input id="productSubcategoryName" required autocomplete="off" placeholder="Finished Goods"></label>
+                <div class="action-row">
+                  <button type="submit">Save Sub-category</button>
+                  <button id="deleteProductSubcategory" type="button" class="secondary">Delete</button>
+                  <button id="clearProductSubcategory" type="button" class="secondary">Clear</button>
+                </div>
+              </form>
             </section>
             <section class="panel">
               <div class="panel-heading"><h2>Product / Service Master</h2></div>
@@ -261,8 +304,8 @@
                     <option value="service">Service</option>
                   </select>
                 </label>
-                <label class="product-stock-field">Category<input id="productCategory" autocomplete="off" placeholder="General"></label>
-                <label class="product-stock-field">Sub-category<input id="productSubcategory" autocomplete="off" placeholder="General"></label>
+                <label class="product-stock-field">Category<select id="productCategory" required></select></label>
+                <label class="product-stock-field">Sub-category<select id="productSubcategory" required></select></label>
                 <label class="product-stock-field">Opening Quantity<input id="productOpeningQuantity" type="number" min="0" step="0.001" value="0"></label>
                 <label class="product-stock-field">Opening Value<input id="productOpeningValue" inputmode="decimal" placeholder="0.00"></label>
                 <label class="product-gst-field">HSN / SAC Code<input id="productHsnSac" autocomplete="off"></label>
