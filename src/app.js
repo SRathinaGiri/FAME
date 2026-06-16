@@ -2316,7 +2316,14 @@ async function deleteCoaForm(level) {
 }
 
 function bindEvents() {
-  els.navTabs.forEach((tab) => tab.addEventListener('click', () => {
+  els.navTabs.forEach((tab) => tab.addEventListener('click', (event) => {
+    const reportsActive = document.querySelector('#reportsView')?.classList.contains('active');
+    if (tab.dataset.view === 'reports' && reportsActive && els.reportNavGroup && els.reportNavGroup.open) {
+      event.preventDefault();
+      event.stopPropagation();
+      els.reportNavGroup.open = false;
+      return;
+    }
     state.voucherReportReturn = null;
     els.backToReport.classList.add('hidden');
     switchView(tab.dataset.view);
