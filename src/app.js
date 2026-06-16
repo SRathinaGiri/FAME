@@ -4,7 +4,7 @@ import { decryptBackup, encryptBackup } from './crypto.js';
 const moneyFormatter = new Intl.NumberFormat('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const quantityFormatter = new Intl.NumberFormat('en-IN', { maximumFractionDigits: 3 });
 const appLocale = 'en-IN';
-const APP_VERSION = 'v23';
+const APP_VERSION = 'v24';
 const indiaStates = [
   ['AP', 'Andhra Pradesh'],
   ['AR', 'Arunachal Pradesh'],
@@ -154,6 +154,8 @@ const els = {
   productKind: document.querySelector('#productKind'),
   productCategory: document.querySelector('#productCategory'),
   productSubcategory: document.querySelector('#productSubcategory'),
+  productOpeningQuantity: document.querySelector('#productOpeningQuantity'),
+  productOpeningValue: document.querySelector('#productOpeningValue'),
   productHsnSac: document.querySelector('#productHsnSac'),
   productGstRate: document.querySelector('#productGstRate'),
   productItcAvailable: document.querySelector('#productItcAvailable'),
@@ -229,6 +231,7 @@ const els = {
   companyRegistration2: document.querySelector('#companyRegistration2'),
   companyRegistration3: document.querySelector('#companyRegistration3'),
   companyFinancialYearStart: document.querySelector('#companyFinancialYearStart'),
+  companyStockValuationMethod: document.querySelector('#companyStockValuationMethod'),
   companyGstEnabled: document.querySelector('#companyGstEnabled'),
   newCompany: document.querySelector('#newCompany'),
   gstLockNote: document.querySelector('#gstLockNote'),
@@ -682,6 +685,7 @@ function renderCompanyMaster() {
   els.companyRegistration2.value = company.registration2 || '';
   els.companyRegistration3.value = company.registration3 || '';
   setDateInputValue(els.companyFinancialYearStart, company.financialYearStart || `${todayIso().slice(0, 4)}-04-01`);
+  els.companyStockValuationMethod.value = company.stockValuationMethod || 'weighted_average';
   els.companyGstEnabled.checked = Boolean(company.gstEnabled);
   els.companyGstEnabled.disabled = state.hasTransactions;
   els.gstLockNote.classList.toggle('hidden', !state.hasTransactions);
@@ -692,6 +696,8 @@ function clearProductForm() {
   els.productId.value = '';
   els.productCategory.value = '';
   els.productSubcategory.value = '';
+  els.productOpeningQuantity.value = '0';
+  els.productOpeningValue.value = '';
   els.productGstRate.value = '0';
   els.productItcAvailable.checked = true;
   els.deleteProduct.disabled = true;
@@ -722,7 +728,7 @@ function renderProductMaster() {
       <button class="product-row" type="button" data-product-id="${product.id}">
         <strong>${escapeHtml(product.name)}</strong>
           <span>${escapeHtml(product.kind)}${product.kind === 'product'
-            ? ` | ${escapeHtml(product.categoryName || 'Uncategorised')} / ${escapeHtml(product.subcategoryName || 'General')}`
+            ? ` | ${escapeHtml(product.categoryName || 'Uncategorised')} / ${escapeHtml(product.subcategoryName || 'General')} | Op ${formatQuantity(product.openingQuantity)} / ${minorToMoney(product.openingValueMinor)}`
             : ''}${state.company.gstEnabled
             ? ` | ${escapeHtml(product.hsnSacCode || 'No HSN/SAC')} | GST ${product.gstRate}%`
             : ''}</span>
@@ -738,6 +744,8 @@ function renderProductMaster() {
       els.productKind.value = product.kind;
       els.productCategory.value = product.categoryName || '';
       els.productSubcategory.value = product.subcategoryName || '';
+      els.productOpeningQuantity.value = product.openingQuantity || '0';
+      els.productOpeningValue.value = product.openingValueMinor ? minorToMoney(product.openingValueMinor) : '';
       els.productHsnSac.value = product.hsnSacCode || '';
       els.productGstRate.value = product.gstRate;
       els.productItcAvailable.checked = Boolean(product.itcAvailable);
@@ -1312,12 +1320,12 @@ function renderFixedAssetSchedule(data) {
 
 function renderStockSummary(data) {
   els.reportTitle.textContent = 'Stock Summary';
-  els.reportMeta.textContent = dateRangeLabel(dateInputValue(els.reportFromDate), dateInputValue(els.reportToDate));
+  els.reportMeta.textContent = `${dateRangeLabel(dateInputValue(els.reportFromDate), dateInputValue(els.reportToDate))} | ${data.methodName}`;
   reportKpis([
-    { label: 'Opening Qty', value: formatQuantity(data.totals.openingQuantity) },
-    { label: 'Inward Qty', value: formatQuantity(data.totals.inwardQuantity) },
-    { label: 'Outward Qty', value: formatQuantity(data.totals.outwardQuantity) },
-    { label: 'Closing Qty', value: formatQuantity(data.totals.closingQuantity) }
+    { label: 'Opening', value: `${formatQuantity(data.totals.openingQuantity)} / ${minorToMoney(data.totals.openingValueMinor)}` },
+    { label: 'Inward', value: `${formatQuantity(data.totals.inwardQuantity)} / ${minorToMoney(data.totals.inwardValueMinor)}` },
+    { label: 'Outward', value: `${formatQuantity(data.totals.outwardQuantity)} / ${minorToMoney(data.totals.outwardValueMinor)}` },
+    { label: 'Closing', value: `${formatQuantity(data.totals.closingQuantity)} / ${minorToMoney(data.totals.closingValueMinor)}` }
   ]);
   const headers = [
     { label: 'Sl.No.', amount: true },
@@ -1325,9 +1333,13 @@ function renderStockSummary(data) {
     { label: 'Sub-category' },
     { label: 'Product' },
     { label: 'Opening Qty', amount: true },
+    { label: 'Opening Value', amount: true },
     { label: 'Inward Qty', amount: true },
+    { label: 'Inward Value', amount: true },
     { label: 'Outward Qty', amount: true },
-    { label: 'Closing Qty', amount: true }
+    { label: 'Outward Value', amount: true },
+    { label: 'Closing Qty', amount: true },
+    { label: 'Closing Value', amount: true }
   ];
   const body = data.rows.length
     ? data.rows.map((row) => `
@@ -1337,20 +1349,28 @@ function renderStockSummary(data) {
           <td>${escapeHtml(row.subcategoryName)}</td>
           <td>${escapeHtml(row.productName)}</td>
           <td class="amount">${formatQuantity(row.openingQuantity)}</td>
+          <td class="amount">${minorToMoney(row.openingValueMinor)}</td>
           <td class="amount">${formatQuantity(row.inwardQuantity)}</td>
+          <td class="amount">${minorToMoney(row.inwardValueMinor)}</td>
           <td class="amount">${formatQuantity(row.outwardQuantity)}</td>
+          <td class="amount">${minorToMoney(row.outwardValueMinor)}</td>
           <td class="amount">${formatQuantity(row.closingQuantity)}</td>
+          <td class="amount">${minorToMoney(row.closingValueMinor)}</td>
         </tr>
       `).join('') + `
         <tr class="report-total-row">
           <td colspan="4">Total</td>
           <td class="amount">${formatQuantity(data.totals.openingQuantity)}</td>
+          <td class="amount">${minorToMoney(data.totals.openingValueMinor)}</td>
           <td class="amount">${formatQuantity(data.totals.inwardQuantity)}</td>
+          <td class="amount">${minorToMoney(data.totals.inwardValueMinor)}</td>
           <td class="amount">${formatQuantity(data.totals.outwardQuantity)}</td>
+          <td class="amount">${minorToMoney(data.totals.outwardValueMinor)}</td>
           <td class="amount">${formatQuantity(data.totals.closingQuantity)}</td>
+          <td class="amount">${minorToMoney(data.totals.closingValueMinor)}</td>
         </tr>
       `
-    : '<tr><td colspan="8" class="empty">No product masters available for stock reporting.</td></tr>';
+    : '<tr><td colspan="12" class="empty">No product masters available for stock reporting.</td></tr>';
   els.reportContent.innerHTML = reportTable(headers, body);
   state.reportExport = {
     title: els.reportTitle.textContent,
@@ -1363,13 +1383,83 @@ function renderStockSummary(data) {
         row.subcategoryName,
         row.productName,
         row.openingQuantity,
+        minorToNumber(row.openingValueMinor),
         row.inwardQuantity,
+        minorToNumber(row.inwardValueMinor),
         row.outwardQuantity,
-        row.closingQuantity
+        minorToNumber(row.outwardValueMinor),
+        row.closingQuantity,
+        minorToNumber(row.closingValueMinor)
       ]),
-      ['Total', '', '', '', data.totals.openingQuantity, data.totals.inwardQuantity, data.totals.outwardQuantity, data.totals.closingQuantity]
+      [
+        'Total', '', '', '',
+        data.totals.openingQuantity, minorToNumber(data.totals.openingValueMinor),
+        data.totals.inwardQuantity, minorToNumber(data.totals.inwardValueMinor),
+        data.totals.outwardQuantity, minorToNumber(data.totals.outwardValueMinor),
+        data.totals.closingQuantity, minorToNumber(data.totals.closingValueMinor)
+      ]
     ]
   };
+}
+
+function renderStockMovement(data) {
+  els.reportTitle.textContent = 'Stock Movement Register';
+  els.reportMeta.textContent = `${dateRangeLabel(dateInputValue(els.reportFromDate), dateInputValue(els.reportToDate))} | ${data.methodName}`;
+  reportKpis([
+    { label: 'Inward', value: `${formatQuantity(data.totals.inwardQuantity)} / ${minorToMoney(data.totals.inwardValueMinor)}` },
+    { label: 'Outward', value: `${formatQuantity(data.totals.outwardQuantity)} / ${minorToMoney(data.totals.outwardValueMinor)}` },
+    { label: 'Closing', value: `${formatQuantity(data.totals.closingQuantity)} / ${minorToMoney(data.totals.closingValueMinor)}` }
+  ]);
+  const headers = [
+    { label: 'Sl.No.', amount: true },
+    { label: 'Date' },
+    { label: 'Voucher' },
+    { label: 'Type' },
+    { label: 'Product' },
+    { label: 'Movement' },
+    { label: 'Qty', amount: true },
+    { label: 'Rate', amount: true },
+    { label: 'Value', amount: true },
+    { label: 'Closing Qty', amount: true },
+    { label: 'Closing Value', amount: true }
+  ];
+  const body = data.movementRows.length
+    ? data.movementRows.map((row) => `
+        <tr>
+          <td class="amount">${row.slNo}</td>
+          <td>${row.voucherDate ? formatDate(row.voucherDate) : ''}</td>
+          <td>${row.voucherId ? voucherButton(row) : ''}</td>
+          <td class="capitalize">${escapeHtml(row.type)}</td>
+          <td>${escapeHtml(row.productName)}</td>
+          <td>${escapeHtml(row.movementType)}</td>
+          <td class="amount">${formatQuantity(row.quantity)}</td>
+          <td class="amount">${minorToMoney(row.rateMinor)}</td>
+          <td class="amount">${minorToMoney(row.valueMinor)}</td>
+          <td class="amount">${formatQuantity(row.closingQuantity)}</td>
+          <td class="amount">${minorToMoney(row.closingValueMinor)}</td>
+        </tr>
+      `).join('')
+    : '<tr><td colspan="11" class="empty">No stock movements in this period.</td></tr>';
+  els.reportContent.innerHTML = reportTable(headers, body);
+  state.reportExport = {
+    title: els.reportTitle.textContent,
+    meta: els.reportMeta.textContent,
+    headers: headers.map((header) => header.label),
+    rows: data.movementRows.map((row) => [
+      row.slNo,
+      row.voucherDate ? formatDate(row.voucherDate) : '',
+      row.voucherNo || '',
+      row.type,
+      row.productName,
+      row.movementType,
+      row.quantity,
+      minorToNumber(row.rateMinor),
+      minorToNumber(row.valueMinor),
+      row.closingQuantity,
+      minorToNumber(row.closingValueMinor)
+    ])
+  };
+  bindReportLinks(els.reportContent);
 }
 
 function renderBalanceSheet(data) {
@@ -1491,6 +1581,8 @@ async function runReport() {
     renderTrialBalance(await dbCall('reportTrialBalance', { asOfDate }));
   } else if (state.activeReport === 'stockSummary') {
     renderStockSummary(await dbCall('reportStockSummary', { fromDate, toDate }));
+  } else if (state.activeReport === 'stockMovement') {
+    renderStockMovement(await dbCall('reportStockMovement', { fromDate, toDate }));
   } else if (state.activeReport === 'fixedAssetRegister') {
     renderFixedAssetRegister(await dbCall('reportFixedAssetRegister', { asOfDate }));
   } else if (state.activeReport === 'fixedAssetSchedule') {
@@ -2258,6 +2350,8 @@ function bindEvents() {
       kind: els.productKind.value,
       categoryName: els.productCategory.value,
       subcategoryName: els.productSubcategory.value,
+      openingQuantity: els.productOpeningQuantity.value,
+      openingValueMinor: moneyToMinor(els.productOpeningValue.value),
       hsnSacCode: els.productHsnSac.value,
       gstRate: els.productGstRate.value,
       itcAvailable: els.productItcAvailable.checked,
@@ -2290,6 +2384,7 @@ function bindEvents() {
       registration2: els.companyRegistration2.value,
       registration3: els.companyRegistration3.value,
       financialYearStart: dateInputValue(els.companyFinancialYearStart),
+      stockValuationMethod: els.companyStockValuationMethod.value,
       gstEnabled: els.companyGstEnabled.checked
     });
     await refreshSnapshot();

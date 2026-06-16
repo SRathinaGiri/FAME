@@ -263,6 +263,8 @@
                 </label>
                 <label class="product-stock-field">Category<input id="productCategory" autocomplete="off" placeholder="General"></label>
                 <label class="product-stock-field">Sub-category<input id="productSubcategory" autocomplete="off" placeholder="General"></label>
+                <label class="product-stock-field">Opening Quantity<input id="productOpeningQuantity" type="number" min="0" step="0.001" value="0"></label>
+                <label class="product-stock-field">Opening Value<input id="productOpeningValue" inputmode="decimal" placeholder="0.00"></label>
                 <label class="product-gst-field">HSN / SAC Code<input id="productHsnSac" autocomplete="off"></label>
                 <label class="product-gst-field">GST Rate %<input id="productGstRate" type="number" min="0" step="0.01" value="0"></label>
                 <label class="checkbox-row product-gst-field"><input id="productItcAvailable" type="checkbox" checked> ITC available on purchase</label>
@@ -427,6 +429,7 @@
               <button class="report-tab" type="button" data-report="expenseJournal">Expense Journal</button>
               <button class="report-tab" type="button" data-report="incomeJournal">Income Journal</button>
               <button class="report-tab" type="button" data-report="stockSummary">Stock Summary</button>
+              <button class="report-tab" type="button" data-report="stockMovement">Stock Movement</button>
               <button class="report-tab" type="button" data-report="fixedAssetRegister">Fixed Asset Register</button>
               <button class="report-tab" type="button" data-report="fixedAssetSchedule">Depreciation Schedule</button>
             </div>
@@ -549,6 +552,13 @@
               <label>Government Registration 2<input id="companyRegistration2" autocomplete="off"></label>
               <label>Government Registration 3<input id="companyRegistration3" autocomplete="off"></label>
               <label>Financial Year Start Date<input id="companyFinancialYearStart" class="date-input" inputmode="numeric" placeholder="dd-mm-yyyy" pattern="\d{2}-\d{2}-\d{4}" required></label>
+              <label>
+                Stock Valuation Method
+                <select id="companyStockValuationMethod">
+                  <option value="weighted_average">Weighted Average</option>
+                  <option value="fifo">FIFO</option>
+                </select>
+              </label>
               <label class="checkbox-row">
                 <input id="companyGstEnabled" type="checkbox">
                 GST Enabled

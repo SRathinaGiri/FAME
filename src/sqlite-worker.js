@@ -230,6 +230,7 @@ function ensureSchema() {
       registration_3 TEXT NOT NULL DEFAULT '',
       financial_year_start TEXT NOT NULL DEFAULT '',
       gst_enabled INTEGER NOT NULL DEFAULT 0,
+      stock_valuation_method TEXT NOT NULL DEFAULT 'weighted_average',
       updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
     CREATE TABLE IF NOT EXISTS products (
@@ -238,6 +239,8 @@ function ensureSchema() {
       kind TEXT NOT NULL CHECK (kind IN ('product','service')),
       category_name TEXT NOT NULL DEFAULT '',
       subcategory_name TEXT NOT NULL DEFAULT '',
+      opening_quantity REAL NOT NULL DEFAULT 0 CHECK (opening_quantity >= 0),
+      opening_value_minor INTEGER NOT NULL DEFAULT 0 CHECK (opening_value_minor >= 0),
       hsn_sac_code TEXT NOT NULL DEFAULT '',
       gst_rate REAL NOT NULL DEFAULT 0 CHECK (gst_rate >= 0),
       itc_available INTEGER NOT NULL DEFAULT 1,
@@ -353,8 +356,11 @@ function addColumnIfMissing(table, column, definition) {
 
 function migrateSchema() {
   addColumnIfMissing('accounts', 'opening_balance_minor', 'INTEGER NOT NULL DEFAULT 0');
+  addColumnIfMissing('company_master', 'stock_valuation_method', "TEXT NOT NULL DEFAULT 'weighted_average'");
   addColumnIfMissing('products', 'category_name', "TEXT NOT NULL DEFAULT ''");
   addColumnIfMissing('products', 'subcategory_name', "TEXT NOT NULL DEFAULT ''");
+  addColumnIfMissing('products', 'opening_quantity', 'REAL NOT NULL DEFAULT 0');
+  addColumnIfMissing('products', 'opening_value_minor', 'INTEGER NOT NULL DEFAULT 0');
   exec(`
     INSERT INTO settings (key, value) VALUES (?, ?)
     ON CONFLICT(key) DO UPDATE SET value = excluded.value
@@ -515,11 +521,12 @@ function getCompanyMaster() {
     SELECT name, address, state, country, gst_no AS gstNo, pan_no AS panNo,
            registration_1 AS registration1, registration_2 AS registration2,
            registration_3 AS registration3, financial_year_start AS financialYearStart,
-           gst_enabled AS gstEnabled
+           gst_enabled AS gstEnabled, stock_valuation_method AS stockValuationMethod
     FROM company_master WHERE id = 1
   `) || {
     name: '', address: '', state: '', country: '', gstNo: '', panNo: '',
-    registration1: '', registration2: '', registration3: '', financialYearStart: '', gstEnabled: 0
+    registration1: '', registration2: '', registration3: '', financialYearStart: '',
+    gstEnabled: 0, stockValuationMethod: 'weighted_average'
   };
 }
 
@@ -552,8 +559,10 @@ function profitLossBefore(date) {
 async function saveCompanyMaster(company = {}) {
   const name = String(company.name || '').trim();
   const financialYearStart = String(company.financialYearStart || '').trim();
+  const stockValuationMethod = String(company.stockValuationMethod || 'weighted_average');
   if (!name) throw new Error('Company name is required.');
   if (!/^\d{4}-\d{2}-\d{2}$/.test(financialYearStart)) throw new Error('Select a financial year start date.');
+  if (!['weighted_average', 'fifo'].includes(stockValuationMethod)) throw new Error('Select a valid stock valuation method.');
   const existing = getCompanyMaster();
   const hasTransactions = one('SELECT 1 AS yes FROM vouchers LIMIT 1');
   if (hasTransactions && Boolean(existing.gstEnabled) !== Boolean(company.gstEnabled)) {
@@ -562,21 +571,24 @@ async function saveCompanyMaster(company = {}) {
   transaction(() => exec(`
     INSERT INTO company_master (
       id, name, address, state, country, gst_no, pan_no,
-      registration_1, registration_2, registration_3, financial_year_start, gst_enabled, updated_at
-    ) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+      registration_1, registration_2, registration_3, financial_year_start,
+      gst_enabled, stock_valuation_method, updated_at
+    ) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
     ON CONFLICT(id) DO UPDATE SET
       name = excluded.name, address = excluded.address, state = excluded.state,
       country = excluded.country, gst_no = excluded.gst_no, pan_no = excluded.pan_no,
       registration_1 = excluded.registration_1, registration_2 = excluded.registration_2,
       registration_3 = excluded.registration_3,
       financial_year_start = excluded.financial_year_start,
-      gst_enabled = excluded.gst_enabled, updated_at = CURRENT_TIMESTAMP
+      gst_enabled = excluded.gst_enabled,
+      stock_valuation_method = excluded.stock_valuation_method,
+      updated_at = CURRENT_TIMESTAMP
   `, [
     name, String(company.address || '').trim(), String(company.state || '').trim(),
     String(company.country || '').trim(), String(company.gstNo || '').trim(),
     String(company.panNo || '').trim(), String(company.registration1 || '').trim(),
     String(company.registration2 || '').trim(), String(company.registration3 || '').trim(),
-    financialYearStart, company.gstEnabled ? 1 : 0
+    financialYearStart, company.gstEnabled ? 1 : 0, stockValuationMethod
   ]));
   await persistIfMirrored();
   return getSnapshot();
@@ -586,6 +598,7 @@ function listProducts() {
   return all(`
     SELECT p.id, p.name, p.kind, p.hsn_sac_code AS hsnSacCode, p.gst_rate AS gstRate,
            p.category_name AS categoryName, p.subcategory_name AS subcategoryName,
+           p.opening_quantity AS openingQuantity, p.opening_value_minor AS openingValueMinor,
            p.itc_available AS itcAvailable, p.purchase_account_id AS purchaseAccountId,
            pa.code AS purchaseAccountCode, pa.name AS purchaseAccountName,
            p.sales_account_id AS salesAccountId, sa.code AS salesAccountCode,
@@ -602,27 +615,33 @@ async function saveProduct(product = {}) {
   const kind = String(product.kind || '');
   const categoryName = kind === 'product' ? String(product.categoryName || '').trim() : '';
   const subcategoryName = kind === 'product' ? String(product.subcategoryName || '').trim() : '';
+  const openingQuantity = kind === 'product' ? Number(product.openingQuantity || 0) : 0;
+  const openingValueMinor = kind === 'product' ? Number(product.openingValueMinor || 0) : 0;
   const gstRate = Number(product.gstRate || 0);
   if (!name) throw new Error('Product or service name is required.');
   if (!['product', 'service'].includes(kind)) throw new Error('Select product or service.');
   if (!product.purchaseAccountId || !product.salesAccountId) throw new Error('Select purchase and sales accounts.');
+  if (!Number.isFinite(openingQuantity) || openingQuantity < 0) throw new Error('Enter a valid opening stock quantity.');
+  if (!Number.isFinite(openingValueMinor) || openingValueMinor < 0) throw new Error('Enter a valid opening stock value.');
   if (!Number.isFinite(gstRate) || gstRate < 0) throw new Error('Enter a valid GST rate.');
   transaction(() => {
     if (product.id) {
       exec(`
         UPDATE products SET name = ?, kind = ?, category_name = ?, subcategory_name = ?,
-          hsn_sac_code = ?, gst_rate = ?,
+          opening_quantity = ?, opening_value_minor = ?, hsn_sac_code = ?, gst_rate = ?,
           itc_available = ?, purchase_account_id = ?, sales_account_id = ?,
           updated_at = CURRENT_TIMESTAMP WHERE id = ?
-      `, [name, kind, categoryName, subcategoryName, String(product.hsnSacCode || '').trim(), gstRate, product.itcAvailable ? 1 : 0,
+      `, [name, kind, categoryName, subcategoryName, openingQuantity, openingValueMinor, String(product.hsnSacCode || '').trim(), gstRate, product.itcAvailable ? 1 : 0,
         product.purchaseAccountId, product.salesAccountId, product.id]);
     } else {
       exec(`
         INSERT INTO products (
-          id, name, kind, category_name, subcategory_name, hsn_sac_code, gst_rate, itc_available,
+          id, name, kind, category_name, subcategory_name, opening_quantity,
+          opening_value_minor, hsn_sac_code, gst_rate, itc_available,
           purchase_account_id, sales_account_id
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `, [crypto.randomUUID(), name, kind, categoryName, subcategoryName, String(product.hsnSacCode || '').trim(), gstRate,
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `, [crypto.randomUUID(), name, kind, categoryName, subcategoryName, openingQuantity,
+        openingValueMinor, String(product.hsnSacCode || '').trim(), gstRate,
         product.itcAvailable ? 1 : 0, product.purchaseAccountId, product.salesAccountId]);
     }
   });
@@ -1934,71 +1953,226 @@ function reportBalanceSheet({ asOfDate = '' } = {}) {
   };
 }
 
-function reportStockSummary({ fromDate = '', toDate = '' } = {}) {
-  const rows = all(`
-    SELECT p.id AS productId, p.name AS productName,
+function valuationMethod() {
+  const method = getCompanyMaster().stockValuationMethod || 'weighted_average';
+  return method === 'fifo' ? 'fifo' : 'weighted_average';
+}
+
+function valuationMethodName(method = valuationMethod()) {
+  return method === 'fifo' ? 'FIFO' : 'Weighted Average';
+}
+
+function stockMovementRows(toDate = '') {
+  return all(`
+    SELECT vi.id AS itemId, vi.product_id AS productId, p.name AS productName,
            COALESCE(NULLIF(p.category_name, ''), 'Uncategorised') AS categoryName,
            COALESCE(NULLIF(p.subcategory_name, ''), 'General') AS subcategoryName,
-           COALESCE(SUM(CASE
-             WHEN v.id IS NOT NULL
-              AND fa.id IS NULL
-              AND ? <> ''
-              AND v.voucher_date < ?
-              AND v.type IN ('purchase', 'expense') THEN vi.quantity
-             WHEN v.id IS NOT NULL
-              AND fa.id IS NULL
-              AND ? <> ''
-              AND v.voucher_date < ?
-              AND v.type IN ('sales', 'income') THEN -vi.quantity
-             ELSE 0
-           END), 0) AS openingQuantity,
-           COALESCE(SUM(CASE
-             WHEN v.id IS NOT NULL
-              AND fa.id IS NULL
-              AND (? = '' OR v.voucher_date >= ?)
-              AND (? = '' OR v.voucher_date <= ?)
-              AND v.type IN ('purchase', 'expense') THEN vi.quantity
-             ELSE 0
-           END), 0) AS inwardQuantity,
-           COALESCE(SUM(CASE
-             WHEN v.id IS NOT NULL
-              AND fa.id IS NULL
-              AND (? = '' OR v.voucher_date >= ?)
-              AND (? = '' OR v.voucher_date <= ?)
-              AND v.type IN ('sales', 'income') THEN vi.quantity
-             ELSE 0
-           END), 0) AS outwardQuantity
-    FROM products p
-    LEFT JOIN voucher_items vi ON vi.product_id = p.id
-    LEFT JOIN vouchers v ON v.id = vi.voucher_id
-    LEFT JOIN fixed_assets fa ON fa.purchase_voucher_id = v.id OR fa.sale_voucher_id = v.id
+           v.id AS voucherId, v.voucher_no AS voucherNo, v.type,
+           v.voucher_date AS voucherDate, v.reference_no AS referenceNo,
+           v.invoice_no AS invoiceNo, vi.quantity,
+           vi.taxable_minor AS taxableMinor, vi.sort_order AS sortOrder
+    FROM voucher_items vi
+    JOIN vouchers v ON v.id = vi.voucher_id
+    JOIN products p ON p.id = vi.product_id
     WHERE p.kind = 'product'
-    GROUP BY p.id
-    ORDER BY categoryName COLLATE NOCASE, subcategoryName COLLATE NOCASE, p.name COLLATE NOCASE
-  `, [
-    fromDate, fromDate, fromDate, fromDate,
-    fromDate, fromDate, toDate, toDate,
-    fromDate, fromDate, toDate, toDate
-  ]).map((row, index) => {
-    const openingQuantity = Number(row.openingQuantity || 0);
-    const inwardQuantity = Number(row.inwardQuantity || 0);
-    const outwardQuantity = Number(row.outwardQuantity || 0);
+      AND (? = '' OR v.voucher_date <= ?)
+      AND NOT EXISTS (
+        SELECT 1 FROM fixed_assets fa
+        WHERE fa.purchase_voucher_id = v.id OR fa.sale_voucher_id = v.id
+      )
+    ORDER BY p.name COLLATE NOCASE, v.voucher_date, v.voucher_no, vi.sort_order
+  `, [toDate, toDate]).map((row) => ({
+    ...row,
+    quantity: Number(row.quantity || 0),
+    taxableMinor: Number(row.taxableMinor || 0)
+  }));
+}
+
+function stockPosition(product) {
+  const quantity = Number(product.openingQuantity || 0);
+  const valueMinor = Number(product.openingValueMinor || 0);
+  return {
+    quantity,
+    valueMinor,
+    layers: quantity > 0 && valueMinor > 0
+      ? [{ quantity, valueMinor, source: 'Opening stock' }]
+      : []
+  };
+}
+
+function fifoLayerValue(layers) {
+  return layers.reduce((sum, layer) => sum + Number(layer.valueMinor || 0), 0);
+}
+
+function fifoConsume(layers, quantity) {
+  let remaining = quantity;
+  let valueMinor = 0;
+  while (remaining > 0.0000001 && layers.length) {
+    const layer = layers[0];
+    const consumedQuantity = Math.min(layer.quantity, remaining);
+    const consumedValue = consumedQuantity >= layer.quantity - 0.0000001
+      ? layer.valueMinor
+      : Math.round(layer.valueMinor * consumedQuantity / layer.quantity);
+    valueMinor += consumedValue;
+    layer.quantity -= consumedQuantity;
+    layer.valueMinor -= consumedValue;
+    remaining -= consumedQuantity;
+    if (layer.quantity <= 0.0000001 || layer.valueMinor <= 0) layers.shift();
+  }
+  return valueMinor;
+}
+
+function applyStockMovement(position, movement, method) {
+  const quantity = Number(movement.quantity || 0);
+  const inward = ['purchase', 'expense'].includes(movement.type);
+  if (inward) {
+    const valueMinor = Number(movement.taxableMinor || 0);
+    position.quantity += quantity;
+    if (method === 'fifo') {
+      if (quantity > 0 && valueMinor > 0) {
+        position.layers.push({ quantity, valueMinor, source: movement.voucherNo });
+      }
+      position.valueMinor = fifoLayerValue(position.layers);
+    } else {
+      position.valueMinor += valueMinor;
+    }
     return {
-      slNo: index + 1,
-      ...row,
-      openingQuantity,
-      inwardQuantity,
-      outwardQuantity,
-      closingQuantity: openingQuantity + inwardQuantity - outwardQuantity
+      movementType: 'Inward',
+      quantity,
+      rateMinor: quantity ? valueMinor / quantity : 0,
+      valueMinor
     };
-  });
-  const totals = rows.reduce((sum, row) => ({
+  }
+
+  let valueMinor = 0;
+  if (method === 'fifo') {
+    valueMinor = fifoConsume(position.layers, quantity);
+    position.quantity -= quantity;
+    position.valueMinor = fifoLayerValue(position.layers);
+  } else {
+    const rateMinor = position.quantity > 0 ? position.valueMinor / position.quantity : 0;
+    valueMinor = position.quantity > 0 ? Math.min(position.valueMinor, Math.round(rateMinor * quantity)) : 0;
+    position.quantity -= quantity;
+    position.valueMinor = Math.max(0, position.valueMinor - valueMinor);
+  }
+  return {
+    movementType: 'Outward',
+    quantity,
+    rateMinor: quantity ? valueMinor / quantity : 0,
+    valueMinor
+  };
+}
+
+function calculateStockValuation({ fromDate = '', toDate = '', includeMovements = false } = {}) {
+  const method = valuationMethod();
+  const products = listProducts().filter((product) => product.kind === 'product');
+  const movementsByProduct = new Map();
+  for (const movement of stockMovementRows(toDate)) {
+    if (!movementsByProduct.has(movement.productId)) movementsByProduct.set(movement.productId, []);
+    movementsByProduct.get(movement.productId).push(movement);
+  }
+
+  const summaryRows = [];
+  const movementRows = [];
+  for (const product of products) {
+    const movements = movementsByProduct.get(product.id) || [];
+    const position = stockPosition(product);
+    for (const movement of movements.filter((row) => fromDate && row.voucherDate < fromDate)) {
+      applyStockMovement(position, movement, method);
+    }
+
+    const summary = {
+      productId: product.id,
+      productName: product.name,
+      categoryName: product.categoryName || 'Uncategorised',
+      subcategoryName: product.subcategoryName || 'General',
+      openingQuantity: position.quantity,
+      openingValueMinor: position.valueMinor,
+      inwardQuantity: 0,
+      inwardValueMinor: 0,
+      outwardQuantity: 0,
+      outwardValueMinor: 0,
+      closingQuantity: position.quantity,
+      closingValueMinor: position.valueMinor
+    };
+
+    if (includeMovements && (position.quantity || position.valueMinor)) {
+      movementRows.push({
+        productId: product.id,
+        productName: product.name,
+        categoryName: summary.categoryName,
+        subcategoryName: summary.subcategoryName,
+        voucherDate: fromDate || '',
+        voucherId: '',
+        voucherNo: '',
+        type: 'opening',
+        referenceNo: '',
+        invoiceNo: '',
+        movementType: 'Opening',
+        quantity: position.quantity,
+        rateMinor: position.quantity ? position.valueMinor / position.quantity : 0,
+        valueMinor: position.valueMinor,
+        closingQuantity: position.quantity,
+        closingValueMinor: position.valueMinor
+      });
+    }
+
+    for (const movement of movements.filter((row) => (!fromDate || row.voucherDate >= fromDate) && (!toDate || row.voucherDate <= toDate))) {
+      const valued = applyStockMovement(position, movement, method);
+      if (valued.movementType === 'Inward') {
+        summary.inwardQuantity += valued.quantity;
+        summary.inwardValueMinor += valued.valueMinor;
+      } else {
+        summary.outwardQuantity += valued.quantity;
+        summary.outwardValueMinor += valued.valueMinor;
+      }
+      if (includeMovements) {
+        movementRows.push({
+          ...movement,
+          movementType: valued.movementType,
+          rateMinor: valued.rateMinor,
+          valueMinor: valued.valueMinor,
+          closingQuantity: position.quantity,
+          closingValueMinor: position.valueMinor
+        });
+      }
+    }
+
+    summary.closingQuantity = position.quantity;
+    summary.closingValueMinor = position.valueMinor;
+    summaryRows.push(summary);
+  }
+
+  summaryRows.forEach((row, index) => { row.slNo = index + 1; });
+  movementRows.forEach((row, index) => { row.slNo = index + 1; });
+  const totals = summaryRows.reduce((sum, row) => ({
     openingQuantity: sum.openingQuantity + row.openingQuantity,
+    openingValueMinor: sum.openingValueMinor + row.openingValueMinor,
     inwardQuantity: sum.inwardQuantity + row.inwardQuantity,
+    inwardValueMinor: sum.inwardValueMinor + row.inwardValueMinor,
     outwardQuantity: sum.outwardQuantity + row.outwardQuantity,
-    closingQuantity: sum.closingQuantity + row.closingQuantity
-  }), { openingQuantity: 0, inwardQuantity: 0, outwardQuantity: 0, closingQuantity: 0 });
-  return { fromDate, toDate, rows, totals };
+    outwardValueMinor: sum.outwardValueMinor + row.outwardValueMinor,
+    closingQuantity: sum.closingQuantity + row.closingQuantity,
+    closingValueMinor: sum.closingValueMinor + row.closingValueMinor
+  }), {
+    openingQuantity: 0,
+    openingValueMinor: 0,
+    inwardQuantity: 0,
+    inwardValueMinor: 0,
+    outwardQuantity: 0,
+    outwardValueMinor: 0,
+    closingQuantity: 0,
+    closingValueMinor: 0
+  });
+  return { method, methodName: valuationMethodName(method), fromDate, toDate, rows: summaryRows, movementRows, totals };
+}
+
+function reportStockSummary({ fromDate = '', toDate = '' } = {}) {
+  return calculateStockValuation({ fromDate, toDate });
+}
+
+function reportStockMovement({ fromDate = '', toDate = '' } = {}) {
+  return calculateStockValuation({ fromDate, toDate, includeMovements: true });
 }
 
 function reportTag({ tagId, mode = 'account', fromDate = '', toDate = '' } = {}) {
@@ -2173,19 +2347,22 @@ function replaceData(backup) {
         INSERT INTO company_master (
           id, name, address, state, country, gst_no, pan_no,
           registration_1, registration_2, registration_3, financial_year_start,
-          gst_enabled, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          gst_enabled, stock_valuation_method, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `, [
         row.id, row.name, row.address, row.state, row.country, row.gst_no, row.pan_no,
         row.registration_1, row.registration_2, row.registration_3,
-        row.financial_year_start, row.gst_enabled || 0, row.updated_at
+        row.financial_year_start, row.gst_enabled || 0,
+        row.stock_valuation_method || 'weighted_average', row.updated_at
       ]);
       for (const row of backup.data.products || []) exec(`
         INSERT INTO products (
-          id, name, kind, category_name, subcategory_name, hsn_sac_code, gst_rate, itc_available,
+          id, name, kind, category_name, subcategory_name, opening_quantity,
+          opening_value_minor, hsn_sac_code, gst_rate, itc_available,
           purchase_account_id, sales_account_id, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `, [row.id, row.name, row.kind, row.category_name || '', row.subcategory_name || '', row.hsn_sac_code, row.gst_rate,
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `, [row.id, row.name, row.kind, row.category_name || '', row.subcategory_name || '',
+        row.opening_quantity || 0, row.opening_value_minor || 0, row.hsn_sac_code, row.gst_rate,
         row.itc_available, row.purchase_account_id, row.sales_account_id,
         row.created_at, row.updated_at]);
       for (const row of backup.data.fixed_assets || []) exec(`
@@ -2264,6 +2441,7 @@ const handlers = {
   reportFixedAssetRegister,
   reportFixedAssetSchedule,
   reportStockSummary,
+  reportStockMovement,
   postFixedAssetDepreciation,
   reportBalanceSheet,
   reportTag,
