@@ -93,6 +93,7 @@ SEED_ACCOUNTS = [
     ("202103", "IGST", "202100"),
     ("301101", "Owner Capital", "301100"),
     ("302101", "Accumulated Profit and Loss", "302100"),
+    ("302102", "Opening Balance Adjustment Account", "302100"),
     ("401101", "Sales", "401100"),
     ("402101", "Service Income", "402100"),
     ("403101", "Profit on Sale of Assets", "403100"),
@@ -105,26 +106,36 @@ SEED_ACCOUNTS = [
 
 INDIA_STATES = ["TN", "KA", "KL", "AP", "TS", "MH", "GJ", "DL", "RJ", "WB", "UP"]
 ELECTRONICS = [
-    ("LED Television 43 inch", "8528", 18),
-    ("Laptop Computer", "8471", 18),
-    ("Desktop Computer", "8471", 18),
-    ("Smart Phone", "8517", 18),
-    ("Bluetooth Speaker", "8518", 18),
-    ("WiFi Router", "8517", 18),
-    ("Computer Monitor", "8528", 18),
-    ("Inkjet Printer", "8443", 18),
-    ("CCTV Camera", "8525", 18),
-    ("USB Storage Drive", "8523", 18),
-    ("Keyboard and Mouse Combo", "8471", 18),
-    ("Air Conditioner", "8415", 28),
-    ("Refrigerator", "8418", 18),
-    ("Washing Machine", "8450", 18),
-    ("Microwave Oven", "8516", 18),
+    ("LED Television 43 inch", "8528", 18, "Home Entertainment", "Televisions"),
+    ("Laptop Computer", "8471", 18, "Computers", "Laptops"),
+    ("Desktop Computer", "8471", 18, "Computers", "Desktops"),
+    ("Smart Phone", "8517", 18, "Mobiles", "Smart Phones"),
+    ("Bluetooth Speaker", "8518", 18, "Audio", "Speakers"),
+    ("WiFi Router", "8517", 18, "Networking", "Routers"),
+    ("Computer Monitor", "8528", 18, "Computers", "Monitors"),
+    ("Inkjet Printer", "8443", 18, "Peripherals", "Printers"),
+    ("CCTV Camera", "8525", 18, "Security", "CCTV"),
+    ("USB Storage Drive", "8523", 18, "Peripherals", "Storage"),
+    ("Keyboard and Mouse Combo", "8471", 18, "Peripherals", "Input Devices"),
+    ("Air Conditioner", "8415", 28, "Appliances", "Air Conditioners"),
+    ("Refrigerator", "8418", 18, "Appliances", "Refrigerators"),
+    ("Washing Machine", "8450", 18, "Appliances", "Washing Machines"),
+    ("Microwave Oven", "8516", 18, "Appliances", "Kitchen Appliances"),
 ]
 SERVICE_PRODUCTS = [
     ("Installation Service", "9987", 18, "502101", "402101"),
     ("Annual Maintenance Service", "9987", 18, "502101", "402101"),
     ("Delivery Charges", "9968", 18, "502101", "402101"),
+]
+TAG_DEFINITIONS = [
+    ("Retail", "#247d68"),
+    ("Wholesale", "#1f3a5f"),
+    ("Online", "#7a4cc2"),
+    ("Chennai Branch", "#b54708"),
+    ("GST", "#0b7285"),
+    ("Fixed Assets", "#667085"),
+    ("Opening", "#166534"),
+    ("Monthly Expense", "#b42318"),
 ]
 
 
@@ -152,11 +163,15 @@ class Generator:
         self.now = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
         self.data = {table: [] for table in [
             "settings", "account_types", "head_accounts", "subhead_accounts",
-            "accounts", "company_master", "products", "fixed_assets", "tags",
-            "coa_tags", "vouchers", "voucher_lines", "voucher_items", "voucher_tags",
+            "accounts", "company_master", "product_categories", "product_subcategories",
+            "products", "fixed_assets", "tags", "coa_tags", "vouchers",
+            "voucher_lines", "voucher_items", "voucher_tags",
             "fixed_asset_depreciation_entries"
         ]}
         self.ids_by_code: dict[str, str] = {}
+        self.tag_ids: dict[str, str] = {}
+        self.product_category_ids: dict[str, str] = {}
+        self.product_subcategory_ids: dict[tuple[str, str], str] = {}
         self.voucher_seq: dict[tuple[str, str], int] = {}
         self.customers: list[dict] = []
         self.suppliers: list[dict] = []
@@ -227,7 +242,9 @@ class Generator:
     def build(self) -> dict:
         self.seed_chart()
         self.add_company()
+        self.add_tags()
         self.add_parties()
+        self.add_accounting_tags()
         self.add_products()
         self.add_opening_capital()
         self.add_fixed_asset_purchases()
@@ -270,6 +287,7 @@ class Generator:
         row = {
             "id": row_id, "code": code, "name": name, "subhead_id": self.account(subhead_code),
             "is_personal": 1 if personal else 0,
+            "opening_balance_minor": 0,
             "gst_no": self.fake_gstin(state) if personal and self.config.gst_enabled else "",
             "pan_no": self.fake_pan() if personal else "",
             "registration_1": "", "registration_2": "", "registration_3": "",
@@ -302,8 +320,67 @@ class Generator:
             "registration_3": "",
             "financial_year_start": self.start_date.isoformat(),
             "gst_enabled": 1 if self.config.gst_enabled else 0,
+            "stock_valuation_method": "weighted_average",
             "updated_at": self.now,
         })
+
+    def add_tags(self) -> None:
+        for name, color in TAG_DEFINITIONS:
+            tag_id = self.uid()
+            self.tag_ids[name] = tag_id
+            self.data["tags"].append({
+                "id": tag_id,
+                "name": name,
+                "color": color,
+                "created_at": self.now,
+                "updated_at": self.now,
+            })
+
+    def add_coa_tag(self, entity_type: str, entity_id: str, tag_name: str) -> None:
+        tag_id = self.tag_ids.get(tag_name)
+        if not tag_id:
+            return
+        row = {"entity_type": entity_type, "entity_id": entity_id, "tag_id": tag_id}
+        if row not in self.data["coa_tags"]:
+            self.data["coa_tags"].append(row)
+
+    def add_accounting_tags(self) -> None:
+        self.add_coa_tag("head", self.account("102000"), "Retail")
+        self.add_coa_tag("head", self.account("201000"), "Wholesale")
+        self.add_coa_tag("head", self.account("202000"), "GST")
+        self.add_coa_tag("head", self.account("104000"), "Fixed Assets")
+        self.add_coa_tag("account", self.account("101201"), "Chennai Branch")
+        self.add_coa_tag("account", self.account("502101"), "Monthly Expense")
+        for customer in self.customers:
+            self.add_coa_tag("account", customer["id"], self.random.choice(["Retail", "Online", "Chennai Branch"]))
+        for supplier in self.suppliers:
+            self.add_coa_tag("account", supplier["id"], self.random.choice(["Wholesale", "Chennai Branch"]))
+
+    def add_voucher_tag(self, voucher_id: str, tag_name: str) -> None:
+        tag_id = self.tag_ids.get(tag_name)
+        if not tag_id:
+            return
+        row = {"voucher_id": voucher_id, "tag_id": tag_id}
+        if row not in self.data["voucher_tags"]:
+            self.data["voucher_tags"].append(row)
+
+    def add_default_voucher_tags(self, voucher: dict) -> None:
+        voucher_type = voucher["type"]
+        if voucher_type == "sales":
+            self.add_voucher_tag(voucher["id"], self.random.choice(["Retail", "Wholesale", "Online"]))
+        elif voucher_type == "purchase":
+            self.add_voucher_tag(voucher["id"], "Wholesale")
+        elif voucher_type == "expense":
+            self.add_voucher_tag(voucher["id"], "Monthly Expense")
+        elif voucher_type == "journal":
+            self.add_voucher_tag(voucher["id"], "Opening" if voucher["voucher_date"] == self.start_date.isoformat() else "Monthly Expense")
+        if self.config.gst_enabled and voucher_type in {"sales", "purchase", "expense", "income"}:
+            self.add_voucher_tag(voucher["id"], "GST")
+        invoice_no = voucher.get("invoice_no") or ""
+        if invoice_no.startswith("FA-") or invoice_no.startswith("FAS-"):
+            self.add_voucher_tag(voucher["id"], "Fixed Assets")
+        if self.random.random() < 0.35:
+            self.add_voucher_tag(voucher["id"], "Chennai Branch")
 
     def add_parties(self) -> None:
         party_count = max(self.config.accounts - len(SEED_ACCOUNTS), 10)
@@ -318,13 +395,49 @@ class Generator:
             account = self.add_account(f"201{102 + index:03d}", self.name("Supplier"), "201100", personal=True, state=state)
             self.suppliers.append(account)
 
+    def ensure_product_category(self, category_name: str, subcategory_name: str) -> tuple[str, str]:
+        category_name = category_name.strip() or "General"
+        subcategory_name = subcategory_name.strip() or "General"
+        category_id = self.product_category_ids.get(category_name)
+        if not category_id:
+            category_id = self.uid()
+            self.product_category_ids[category_name] = category_id
+            self.data["product_categories"].append({
+                "id": category_id,
+                "name": category_name,
+                "created_at": self.now,
+                "updated_at": self.now,
+            })
+        key = (category_name, subcategory_name)
+        subcategory_id = self.product_subcategory_ids.get(key)
+        if not subcategory_id:
+            subcategory_id = self.uid()
+            self.product_subcategory_ids[key] = subcategory_id
+            self.data["product_subcategories"].append({
+                "id": subcategory_id,
+                "category_id": category_id,
+                "name": subcategory_name,
+                "created_at": self.now,
+                "updated_at": self.now,
+            })
+        return category_id, subcategory_id
+
     def add_products(self) -> None:
         selected = (ELECTRONICS * ((self.config.products // len(ELECTRONICS)) + 1))[: self.config.products]
-        for index, (name, hsn, rate) in enumerate(selected):
+        for index, (name, hsn, rate, category_name, subcategory_name) in enumerate(selected):
+            category_id, subcategory_id = self.ensure_product_category(category_name, subcategory_name)
+            opening_quantity = self.random.randint(4, 35)
+            unit_cost = self.money(self.random.randint(1200, 65000))
             row = {
                 "id": self.uid(),
                 "name": f"{name} Model {index + 1}",
                 "kind": "product",
+                "category_id": category_id,
+                "subcategory_id": subcategory_id,
+                "category_name": category_name,
+                "subcategory_name": subcategory_name,
+                "opening_quantity": opening_quantity,
+                "opening_value_minor": opening_quantity * unit_cost,
                 "hsn_sac_code": hsn,
                 "gst_rate": rate,
                 "itc_available": 1,
@@ -338,6 +451,9 @@ class Generator:
         for name, sac, rate, purchase_code, sales_code in SERVICE_PRODUCTS:
             row = {
                 "id": self.uid(), "name": name, "kind": "service", "hsn_sac_code": sac,
+                "category_id": None, "subcategory_id": None,
+                "category_name": "", "subcategory_name": "",
+                "opening_quantity": 0, "opening_value_minor": 0,
                 "gst_rate": rate, "itc_available": 1,
                 "purchase_account_id": self.account(purchase_code),
                 "sales_account_id": self.account(sales_code),
@@ -465,7 +581,9 @@ class Generator:
                 "description": description, "debit_minor": debit, "credit_minor": credit,
                 "sort_order": order
             })
-        return self.data["vouchers"][-1]
+        voucher = self.data["vouchers"][-1]
+        self.add_default_voucher_tags(voucher)
+        return voucher
 
     def add_item(self, voucher_id: str, product: dict, taxable: int, party_state: str, quantity: float = 1) -> tuple[int, int, int, int]:
         cgst, sgst, igst, total = self.tax_split(taxable, float(product["gst_rate"]), party_state)
