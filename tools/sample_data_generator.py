@@ -33,6 +33,7 @@ SCHEMA_VERSION = 11
 APP_NAME = "F.A.M.E"
 BACKUP_FORMAT = "fame.encrypted.backup"
 KDF_ITERATIONS = 250000
+MIN_BACKUP_PASSWORD_LENGTH = 8
 
 SEED_TYPES = [
     ("asset", "Assets", "debit", 100000),
@@ -761,7 +762,13 @@ def encrypt_backup(backup: dict, password: str) -> dict:
     }
 
 
+def validate_backup_password(password: str) -> None:
+    if password and len(password) < MIN_BACKUP_PASSWORD_LENGTH:
+        raise ValueError(f"F.A.M.E encrypted backups require a password of at least {MIN_BACKUP_PASSWORD_LENGTH} characters.")
+
+
 def generate(config: Config) -> None:
+    validate_backup_password(config.password)
     backup = Generator(config).build()
     payload = encrypt_backup(backup, config.password) if config.password else backup
     config.output.parent.mkdir(parents=True, exist_ok=True)
@@ -804,7 +811,7 @@ class App(Tk):
         ttk.Label(frame, text="Output JSON").grid(row=7, column=0, sticky="w", pady=4)
         ttk.Entry(frame, textvariable=self.output, width=48).grid(row=7, column=1, sticky="ew", pady=4)
         ttk.Button(frame, text="Browse", command=self.browse).grid(row=7, column=2, padx=6)
-        ttk.Label(frame, text="Encrypt Password").grid(row=8, column=0, sticky="w", pady=4)
+        ttk.Label(frame, text="Encrypt Password (min 8)").grid(row=8, column=0, sticky="w", pady=4)
         ttk.Entry(frame, textvariable=self.password, width=18, show="*").grid(row=8, column=1, sticky="ew", pady=4)
         ttk.Checkbutton(frame, text="GST enabled", variable=self.gst_enabled).grid(row=9, column=1, sticky="w", pady=4)
         ttk.Button(frame, text="Generate", command=self.run_generate).grid(row=10, column=1, sticky="e", pady=(12, 0))
@@ -848,7 +855,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--assets", type=int, default=10)
     parser.add_argument("--transactions", type=int, default=1000)
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--password", default="", help="Optional password for F.A.M.E encrypted backup format.")
+    parser.add_argument(
+        "--password",
+        default="",
+        help=f"Optional password for F.A.M.E encrypted backup format; must be at least {MIN_BACKUP_PASSWORD_LENGTH} characters when supplied.",
+    )
     parser.add_argument("--no-gst", action="store_true", help="Disable GST in generated company/sample invoices.")
     return parser.parse_args(argv)
 
@@ -858,6 +869,11 @@ def main(argv: list[str]) -> int:
     if not args.no_gui:
         App().mainloop()
         return 0
+    try:
+        validate_backup_password(args.password)
+    except ValueError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 2
     generate(Config(
         output=Path(args.output),
         years=args.years,
