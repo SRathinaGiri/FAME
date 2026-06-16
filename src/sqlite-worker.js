@@ -88,6 +88,7 @@ const seedAccounts = [
   ['202103', 'IGST', '202100'],
   ['301101', 'Owner Capital', '301100'],
   ['302101', 'Accumulated Profit and Loss', '302100'],
+  ['302102', 'Opening Balance Adjustment Account', '302100'],
   ['401101', 'Sales', '401100'],
   ['402101', 'Service Income', '402100'],
   ['403101', 'Profit on Sale of Assets', '403100'],
@@ -97,6 +98,9 @@ const seedAccounts = [
   ['502301', 'Depreciation Expense', '502300'],
   ['503101', 'Loss on Sale of Assets', '503100']
 ];
+
+const OPENING_ADJUSTMENT_CODE = '302102';
+const SYSTEM_ACCOUNT_CODES = new Set(['302101', OPENING_ADJUSTMENT_CODE]);
 
 function exec(sql, bind) {
   db.exec({ sql, bind });
@@ -203,6 +207,7 @@ function ensureSchema() {
       name TEXT NOT NULL,
       subhead_id TEXT NOT NULL REFERENCES subhead_accounts(id) ON DELETE RESTRICT,
       is_personal INTEGER NOT NULL DEFAULT 0,
+      opening_balance_minor INTEGER NOT NULL DEFAULT 0,
       gst_no TEXT,
       pan_no TEXT,
       registration_1 TEXT,
@@ -231,6 +236,8 @@ function ensureSchema() {
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL COLLATE NOCASE UNIQUE,
       kind TEXT NOT NULL CHECK (kind IN ('product','service')),
+      category_name TEXT NOT NULL DEFAULT '',
+      subcategory_name TEXT NOT NULL DEFAULT '',
       hsn_sac_code TEXT NOT NULL DEFAULT '',
       gst_rate REAL NOT NULL DEFAULT 0 CHECK (gst_rate >= 0),
       itc_available INTEGER NOT NULL DEFAULT 1,
@@ -332,6 +339,40 @@ function ensureSchema() {
 
   const existing = one('SELECT value FROM settings WHERE key = ?', ['schema_version']);
   if (!existing) seedDatabase();
+  migrateSchema();
+  ensureSystemAccounts();
+}
+
+function columnNames(table) {
+  return new Set(all(`PRAGMA table_info(${table})`).map((column) => column.name));
+}
+
+function addColumnIfMissing(table, column, definition) {
+  if (!columnNames(table).has(column)) exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+}
+
+function migrateSchema() {
+  addColumnIfMissing('accounts', 'opening_balance_minor', 'INTEGER NOT NULL DEFAULT 0');
+  addColumnIfMissing('products', 'category_name', "TEXT NOT NULL DEFAULT ''");
+  addColumnIfMissing('products', 'subcategory_name', "TEXT NOT NULL DEFAULT ''");
+  exec(`
+    INSERT INTO settings (key, value) VALUES (?, ?)
+    ON CONFLICT(key) DO UPDATE SET value = excluded.value
+  `, ['schema_version', String(SCHEMA_VERSION)]);
+}
+
+function ensureSystemAccounts() {
+  transaction(() => {
+    const subhead = one('SELECT id FROM subhead_accounts WHERE code = ?', ['302100']);
+    if (subhead && !one('SELECT 1 AS yes FROM accounts WHERE code = ?', [OPENING_ADJUSTMENT_CODE])) {
+      exec('INSERT INTO accounts (id, code, name, subhead_id) VALUES (?, ?, ?, ?)', [
+        crypto.randomUUID(),
+        OPENING_ADJUSTMENT_CODE,
+        'Opening Balance Adjustment Account',
+        subhead.id
+      ]);
+    }
+  });
 }
 
 function seedDatabase() {
@@ -425,14 +466,16 @@ function listSubheads() {
 }
 
 function listPostingAccounts() {
+  const openingAdjustmentMinor = openingBalanceAdjustmentMinor();
   return all(`
     SELECT a.id, a.code, a.name, a.subhead_id AS subheadId, s.code AS subheadCode, s.name AS subheadName,
            h.id AS headId, h.code AS headCode, h.name AS headName,
            h.type_id AS typeId, t.name AS typeName, t.normal_side AS normalSide,
+           a.opening_balance_minor AS storedOpeningBalanceMinor,
            a.is_personal AS isPersonal, a.gst_no AS gstNo, a.pan_no AS panNo,
            a.registration_1 AS registration1, a.registration_2 AS registration2,
            a.registration_3 AS registration3, a.state,
-           (a.code = '302101') AS isSystem,
+           (a.code IN ('302101', '302102')) AS isSystem,
            a.created_at AS createdAt, a.updated_at AS updatedAt,
            EXISTS(SELECT 1 FROM voucher_lines vl WHERE vl.account_id = a.id) AS hasTransactions
     FROM accounts a
@@ -440,7 +483,31 @@ function listPostingAccounts() {
     JOIN head_accounts h ON h.id = s.head_id
     JOIN account_types t ON t.id = h.type_id
     ORDER BY t.base_code, h.code, s.code, a.code
-  `);
+  `).map((account) => ({
+    ...account,
+    openingBalanceMinor: account.code === OPENING_ADJUSTMENT_CODE
+      ? openingAdjustmentMinor
+      : Number(account.storedOpeningBalanceMinor || 0)
+  }));
+}
+
+function openingBalanceAdjustmentMinor() {
+  const row = one(`
+    SELECT COALESCE(SUM(a.opening_balance_minor), 0) AS balanceMinor
+    FROM accounts a
+    JOIN subhead_accounts s ON s.id = a.subhead_id
+    JOIN head_accounts h ON h.id = s.head_id
+    WHERE h.type_id IN ('asset', 'liability', 'equity')
+      AND a.code <> ?
+  `, [OPENING_ADJUSTMENT_CODE]);
+  return -Number(row?.balanceMinor || 0);
+}
+
+function effectiveOpeningBalanceMinor(accountCode, storedOpeningBalanceMinor, typeId) {
+  if (['income', 'expense'].includes(typeId)) return 0;
+  return accountCode === OPENING_ADJUSTMENT_CODE
+    ? openingBalanceAdjustmentMinor()
+    : Number(storedOpeningBalanceMinor || 0);
 }
 
 function getCompanyMaster() {
@@ -518,6 +585,7 @@ async function saveCompanyMaster(company = {}) {
 function listProducts() {
   return all(`
     SELECT p.id, p.name, p.kind, p.hsn_sac_code AS hsnSacCode, p.gst_rate AS gstRate,
+           p.category_name AS categoryName, p.subcategory_name AS subcategoryName,
            p.itc_available AS itcAvailable, p.purchase_account_id AS purchaseAccountId,
            pa.code AS purchaseAccountCode, pa.name AS purchaseAccountName,
            p.sales_account_id AS salesAccountId, sa.code AS salesAccountCode,
@@ -532,6 +600,8 @@ function listProducts() {
 async function saveProduct(product = {}) {
   const name = String(product.name || '').trim();
   const kind = String(product.kind || '');
+  const categoryName = kind === 'product' ? String(product.categoryName || '').trim() : '';
+  const subcategoryName = kind === 'product' ? String(product.subcategoryName || '').trim() : '';
   const gstRate = Number(product.gstRate || 0);
   if (!name) throw new Error('Product or service name is required.');
   if (!['product', 'service'].includes(kind)) throw new Error('Select product or service.');
@@ -540,18 +610,19 @@ async function saveProduct(product = {}) {
   transaction(() => {
     if (product.id) {
       exec(`
-        UPDATE products SET name = ?, kind = ?, hsn_sac_code = ?, gst_rate = ?,
+        UPDATE products SET name = ?, kind = ?, category_name = ?, subcategory_name = ?,
+          hsn_sac_code = ?, gst_rate = ?,
           itc_available = ?, purchase_account_id = ?, sales_account_id = ?,
           updated_at = CURRENT_TIMESTAMP WHERE id = ?
-      `, [name, kind, String(product.hsnSacCode || '').trim(), gstRate, product.itcAvailable ? 1 : 0,
+      `, [name, kind, categoryName, subcategoryName, String(product.hsnSacCode || '').trim(), gstRate, product.itcAvailable ? 1 : 0,
         product.purchaseAccountId, product.salesAccountId, product.id]);
     } else {
       exec(`
         INSERT INTO products (
-          id, name, kind, hsn_sac_code, gst_rate, itc_available,
+          id, name, kind, category_name, subcategory_name, hsn_sac_code, gst_rate, itc_available,
           purchase_account_id, sales_account_id
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-      `, [crypto.randomUUID(), name, kind, String(product.hsnSacCode || '').trim(), gstRate,
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `, [crypto.randomUUID(), name, kind, categoryName, subcategoryName, String(product.hsnSacCode || '').trim(), gstRate,
         product.itcAvailable ? 1 : 0, product.purchaseAccountId, product.salesAccountId]);
     }
   });
@@ -985,9 +1056,20 @@ async function saveCoaItem(item) {
     } else if (level === 'account') {
       if (!item.subheadId) throw new Error('Sub-head account is required.');
       const currentAccount = item.id ? one('SELECT code FROM accounts WHERE id = ?', [item.id]) : null;
-      if (currentAccount?.code === '302101' && (code !== '302101' || name !== 'Accumulated Profit and Loss')) {
-        throw new Error('The Accumulated Profit and Loss account is maintained by the system.');
+      if (SYSTEM_ACCOUNT_CODES.has(currentAccount?.code) && (code !== currentAccount.code || !name)) {
+        throw new Error('System accounts are maintained by F.A.M.E.');
       }
+      const selectedSubhead = one(`
+        SELECT h.type_id AS typeId
+        FROM subhead_accounts s
+        JOIN head_accounts h ON h.id = s.head_id
+        WHERE s.id = ?
+      `, [item.subheadId]);
+      const openingBalanceMinor = ['asset', 'liability', 'equity'].includes(selectedSubhead?.typeId)
+        && code !== OPENING_ADJUSTMENT_CODE
+        ? Number(item.openingBalanceMinor || 0)
+        : 0;
+      if (!Number.isFinite(openingBalanceMinor)) throw new Error('Enter a valid opening balance.');
       const personal = item.isPersonal ? 1 : 0;
       const personalFields = personal
         ? [
@@ -999,24 +1081,24 @@ async function saveCoaItem(item) {
       const hasTx = item.id ? one('SELECT 1 AS yes FROM voucher_lines WHERE account_id = ? LIMIT 1', [item.id]) : null;
       if (item.id) {
         if (hasTx) exec(`
-          UPDATE accounts SET name = ?, is_personal = ?, gst_no = ?, pan_no = ?,
+          UPDATE accounts SET name = ?, opening_balance_minor = ?, is_personal = ?, gst_no = ?, pan_no = ?,
             registration_1 = ?, registration_2 = ?, registration_3 = ?, state = ?,
             updated_at = CURRENT_TIMESTAMP
           WHERE id = ?
-        `, [name, personal, ...personalFields, item.id]);
+        `, [name, openingBalanceMinor, personal, ...personalFields, item.id]);
         else exec(`
-          UPDATE accounts SET code = ?, name = ?, subhead_id = ?, is_personal = ?,
+          UPDATE accounts SET code = ?, name = ?, subhead_id = ?, opening_balance_minor = ?, is_personal = ?,
             gst_no = ?, pan_no = ?, registration_1 = ?, registration_2 = ?,
             registration_3 = ?, state = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?
-        `, [code, name, item.subheadId, personal, ...personalFields, item.id]);
+        `, [code, name, item.subheadId, openingBalanceMinor, personal, ...personalFields, item.id]);
       } else {
         item.id = crypto.randomUUID();
         exec(`
           INSERT INTO accounts (
-            id, code, name, subhead_id, is_personal, gst_no, pan_no,
+            id, code, name, subhead_id, opening_balance_minor, is_personal, gst_no, pan_no,
             registration_1, registration_2, registration_3, state
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `, [item.id, code, name, item.subheadId, personal, ...personalFields]);
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `, [item.id, code, name, item.subheadId, openingBalanceMinor, personal, ...personalFields]);
       }
       replaceCoaTagLinks('account', item.id, item.tagIds || []);
     } else {
@@ -1042,7 +1124,7 @@ async function deleteCoaItem({ level, id }) {
       exec('DELETE FROM subhead_accounts WHERE id = ?', [id]);
     } else if (level === 'account') {
       const account = one('SELECT code FROM accounts WHERE id = ?', [id]);
-      if (account?.code === '302101') throw new Error('The Accumulated Profit and Loss account cannot be deleted.');
+      if (SYSTEM_ACCOUNT_CODES.has(account?.code)) throw new Error('System accounts cannot be deleted.');
       const used = one('SELECT 1 AS yes FROM voucher_lines WHERE account_id = ? LIMIT 1', [id]);
       if (used) throw new Error('Cannot delete an account with transactions.');
       replaceCoaTagLinks('account', id, []);
@@ -1500,16 +1582,31 @@ function getVoucherList() {
 }
 
 function getTrialBalance() {
+  const openingAdjustmentMinor = openingBalanceAdjustmentMinor();
   return all(`
-    SELECT a.id, a.code, a.name,
+    SELECT a.id, a.code, a.name, h.type_id AS typeId,
+           a.opening_balance_minor AS storedOpeningBalanceMinor,
            COALESCE(SUM(vl.debit_minor), 0) AS debitMinor,
            COALESCE(SUM(vl.credit_minor), 0) AS creditMinor
     FROM accounts a
+    JOIN subhead_accounts s ON s.id = a.subhead_id
+    JOIN head_accounts h ON h.id = s.head_id
     LEFT JOIN voucher_lines vl ON vl.account_id = a.id
     GROUP BY a.id
-    HAVING debitMinor <> 0 OR creditMinor <> 0
     ORDER BY a.code
-  `);
+  `).map((row) => {
+    const openingBalanceMinor = ['income', 'expense'].includes(row.typeId)
+      ? 0
+      : row.code === OPENING_ADJUSTMENT_CODE
+        ? openingAdjustmentMinor
+        : Number(row.storedOpeningBalanceMinor || 0);
+    const balanceMinor = openingBalanceMinor + Number(row.debitMinor || 0) - Number(row.creditMinor || 0);
+    return {
+      ...row,
+      debitMinor: balanceMinor > 0 ? balanceMinor : 0,
+      creditMinor: balanceMinor < 0 ? Math.abs(balanceMinor) : 0
+    };
+  }).filter((row) => row.debitMinor || row.creditMinor);
 }
 
 function reportDaybook({ fromDate = '', toDate = '' } = {}) {
@@ -1588,7 +1685,8 @@ function reportTaxJournal({ type, fromDate = '', toDate = '' } = {}) {
 function reportLedger({ accountId, fromDate = '', toDate = '' } = {}) {
   if (!accountId) throw new Error('Select an account for the ledger.');
   const account = one(`
-    SELECT a.id, a.code, a.name, h.type_id AS typeId, t.normal_side AS normalSide
+    SELECT a.id, a.code, a.name, h.type_id AS typeId, t.normal_side AS normalSide,
+           a.opening_balance_minor AS storedOpeningBalanceMinor
     FROM accounts a
     JOIN subhead_accounts s ON s.id = a.subhead_id
     JOIN head_accounts h ON h.id = s.head_id
@@ -1609,6 +1707,7 @@ function reportLedger({ accountId, fromDate = '', toDate = '' } = {}) {
           AND v.voucher_date < ?
       `, [accountId, openingFromDate, openingFromDate, fromDate])
     : { balanceMinor: 0 };
+  const masterOpeningMinor = effectiveOpeningBalanceMinor(account.code, account.storedOpeningBalanceMinor, account.typeId);
   const rows = all(`
     SELECT v.id AS voucherId, v.voucher_no AS voucherNo, v.type,
            v.voucher_date AS voucherDate, v.reference_no AS referenceNo,
@@ -1624,14 +1723,14 @@ function reportLedger({ accountId, fromDate = '', toDate = '' } = {}) {
   const accumulatedProfitMinor = account.code === '302101'
     ? profitLossBefore(financialYearStartFor(toDate || fromDate))
     : 0;
-  let runningBalanceMinor = Number(opening.balanceMinor || 0) - accumulatedProfitMinor;
+  let runningBalanceMinor = masterOpeningMinor + Number(opening.balanceMinor || 0) - accumulatedProfitMinor;
   const runningRows = rows.map((row) => {
     runningBalanceMinor += Number(row.debitMinor || 0) - Number(row.creditMinor || 0);
     return { ...row, runningBalanceMinor };
   });
   return {
     account,
-    openingBalanceMinor: Number(opening.balanceMinor || 0) - accumulatedProfitMinor,
+    openingBalanceMinor: masterOpeningMinor + Number(opening.balanceMinor || 0) - accumulatedProfitMinor,
     closingBalanceMinor: runningBalanceMinor,
     rows: runningRows
   };
@@ -1671,11 +1770,13 @@ function reportTrialBalance({ asOfDate = '' } = {}) {
   if (!asOfDate) throw new Error('Select an as-at date for the trial balance.');
   const financialYearStart = financialYearStartFor(asOfDate);
   const accumulatedProfitMinor = profitLossBefore(financialYearStart);
+  const openingAdjustmentMinor = openingBalanceAdjustmentMinor();
   const rows = all(`
     SELECT a.id AS accountId, a.code AS accountCode, a.name AS accountName,
            s.id AS subheadId, s.code AS subheadCode, s.name AS subheadName,
            h.id AS headId, h.code AS headCode, h.name AS headName,
            h.type_id AS typeId, t.name AS typeName,
+           a.opening_balance_minor AS storedOpeningBalanceMinor,
            COALESCE(SUM(CASE WHEN v.voucher_date < ? THEN vl.debit_minor ELSE 0 END), 0) AS rawOpeningDebitMinor,
            COALESCE(SUM(CASE WHEN v.voucher_date < ? THEN vl.credit_minor ELSE 0 END), 0) AS rawOpeningCreditMinor,
            COALESCE(SUM(CASE WHEN v.voucher_date >= ? AND v.voucher_date <= ? THEN vl.debit_minor ELSE 0 END), 0) AS cyDebitMinor,
@@ -1689,9 +1790,14 @@ function reportTrialBalance({ asOfDate = '' } = {}) {
     GROUP BY a.id
     ORDER BY t.base_code, h.code, s.code, a.code
   `, [financialYearStart, financialYearStart, financialYearStart, asOfDate, financialYearStart, asOfDate, asOfDate]).map((row, index) => {
-    let openingBalanceMinor = ['income', 'expense'].includes(row.typeId)
+    const masterOpeningMinor = ['income', 'expense'].includes(row.typeId)
       ? 0
-      : Number(row.rawOpeningDebitMinor || 0) - Number(row.rawOpeningCreditMinor || 0);
+      : row.accountCode === OPENING_ADJUSTMENT_CODE
+        ? openingAdjustmentMinor
+        : Number(row.storedOpeningBalanceMinor || 0);
+    let openingBalanceMinor = masterOpeningMinor + (['income', 'expense'].includes(row.typeId)
+      ? 0
+      : Number(row.rawOpeningDebitMinor || 0) - Number(row.rawOpeningCreditMinor || 0));
     if (row.accountCode === '302101') openingBalanceMinor -= accumulatedProfitMinor;
     const cyDebitMinor = Number(row.cyDebitMinor || 0);
     const cyCreditMinor = Number(row.cyCreditMinor || 0);
@@ -1765,11 +1871,13 @@ function reportFixedAssetSchedule({ asOfDate = '' } = {}) {
 
 function reportBalanceSheet({ asOfDate = '' } = {}) {
   const financialYearStart = financialYearStartFor(asOfDate);
+  const openingAdjustmentMinor = openingBalanceAdjustmentMinor();
   const rows = all(`
     SELECT a.id AS accountId, a.code AS accountCode, a.name AS accountName,
            s.id AS subheadId, s.code AS subheadCode, s.name AS subheadName,
            h.id AS headId, h.code AS headCode, h.name AS headName,
            h.type_id AS typeId,
+           a.opening_balance_minor AS storedOpeningBalanceMinor,
            COALESCE(SUM(vl.debit_minor), 0) AS debitMinor,
            COALESCE(SUM(vl.credit_minor), 0) AS creditMinor
     FROM accounts a
@@ -1784,10 +1892,13 @@ function reportBalanceSheet({ asOfDate = '' } = {}) {
     GROUP BY a.id
     ORDER BY h.type_id, h.code, s.code, a.code
   `, [asOfDate, asOfDate]).map((row) => {
+    const masterOpeningMinor = row.accountCode === OPENING_ADJUSTMENT_CODE
+      ? openingAdjustmentMinor
+      : Number(row.storedOpeningBalanceMinor || 0);
     const amountMinor =
       row.typeId === 'asset'
-        ? Number(row.debitMinor || 0) - Number(row.creditMinor || 0)
-        : Number(row.creditMinor || 0) - Number(row.debitMinor || 0);
+        ? masterOpeningMinor + Number(row.debitMinor || 0) - Number(row.creditMinor || 0)
+        : -(masterOpeningMinor + Number(row.debitMinor || 0) - Number(row.creditMinor || 0));
     return { ...row, amountMinor };
   });
   const accumulatedProfitMinor = profitLossBefore(financialYearStart);
@@ -1821,6 +1932,73 @@ function reportBalanceSheet({ asOfDate = '' } = {}) {
     profitMinor,
     liabilitiesAndEquityMinor: liabilitiesMinor + equityMinor + profitMinor
   };
+}
+
+function reportStockSummary({ fromDate = '', toDate = '' } = {}) {
+  const rows = all(`
+    SELECT p.id AS productId, p.name AS productName,
+           COALESCE(NULLIF(p.category_name, ''), 'Uncategorised') AS categoryName,
+           COALESCE(NULLIF(p.subcategory_name, ''), 'General') AS subcategoryName,
+           COALESCE(SUM(CASE
+             WHEN v.id IS NOT NULL
+              AND fa.id IS NULL
+              AND ? <> ''
+              AND v.voucher_date < ?
+              AND v.type IN ('purchase', 'expense') THEN vi.quantity
+             WHEN v.id IS NOT NULL
+              AND fa.id IS NULL
+              AND ? <> ''
+              AND v.voucher_date < ?
+              AND v.type IN ('sales', 'income') THEN -vi.quantity
+             ELSE 0
+           END), 0) AS openingQuantity,
+           COALESCE(SUM(CASE
+             WHEN v.id IS NOT NULL
+              AND fa.id IS NULL
+              AND (? = '' OR v.voucher_date >= ?)
+              AND (? = '' OR v.voucher_date <= ?)
+              AND v.type IN ('purchase', 'expense') THEN vi.quantity
+             ELSE 0
+           END), 0) AS inwardQuantity,
+           COALESCE(SUM(CASE
+             WHEN v.id IS NOT NULL
+              AND fa.id IS NULL
+              AND (? = '' OR v.voucher_date >= ?)
+              AND (? = '' OR v.voucher_date <= ?)
+              AND v.type IN ('sales', 'income') THEN vi.quantity
+             ELSE 0
+           END), 0) AS outwardQuantity
+    FROM products p
+    LEFT JOIN voucher_items vi ON vi.product_id = p.id
+    LEFT JOIN vouchers v ON v.id = vi.voucher_id
+    LEFT JOIN fixed_assets fa ON fa.purchase_voucher_id = v.id OR fa.sale_voucher_id = v.id
+    WHERE p.kind = 'product'
+    GROUP BY p.id
+    ORDER BY categoryName COLLATE NOCASE, subcategoryName COLLATE NOCASE, p.name COLLATE NOCASE
+  `, [
+    fromDate, fromDate, fromDate, fromDate,
+    fromDate, fromDate, toDate, toDate,
+    fromDate, fromDate, toDate, toDate
+  ]).map((row, index) => {
+    const openingQuantity = Number(row.openingQuantity || 0);
+    const inwardQuantity = Number(row.inwardQuantity || 0);
+    const outwardQuantity = Number(row.outwardQuantity || 0);
+    return {
+      slNo: index + 1,
+      ...row,
+      openingQuantity,
+      inwardQuantity,
+      outwardQuantity,
+      closingQuantity: openingQuantity + inwardQuantity - outwardQuantity
+    };
+  });
+  const totals = rows.reduce((sum, row) => ({
+    openingQuantity: sum.openingQuantity + row.openingQuantity,
+    inwardQuantity: sum.inwardQuantity + row.inwardQuantity,
+    outwardQuantity: sum.outwardQuantity + row.outwardQuantity,
+    closingQuantity: sum.closingQuantity + row.closingQuantity
+  }), { openingQuantity: 0, inwardQuantity: 0, outwardQuantity: 0, closingQuantity: 0 });
+  return { fromDate, toDate, rows, totals };
 }
 
 function reportTag({ tagId, mode = 'account', fromDate = '', toDate = '' } = {}) {
@@ -1982,11 +2160,11 @@ function replaceData(backup) {
       for (const row of backup.data.subhead_accounts || []) exec('INSERT INTO subhead_accounts (id, code, name, head_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)', [row.id, row.code, row.name, row.head_id, row.created_at, row.updated_at]);
       for (const row of backup.data.accounts || []) exec(`
         INSERT INTO accounts (
-          id, code, name, subhead_id, is_personal, gst_no, pan_no,
+          id, code, name, subhead_id, opening_balance_minor, is_personal, gst_no, pan_no,
           registration_1, registration_2, registration_3, state, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `, [
-        row.id, row.code, row.name, row.subhead_id, row.is_personal || 0,
+        row.id, row.code, row.name, row.subhead_id, row.opening_balance_minor || 0, row.is_personal || 0,
         row.gst_no || '', row.pan_no || '', row.registration_1 || '',
         row.registration_2 || '', row.registration_3 || '', row.state || '',
         row.created_at, row.updated_at
@@ -2004,10 +2182,10 @@ function replaceData(backup) {
       ]);
       for (const row of backup.data.products || []) exec(`
         INSERT INTO products (
-          id, name, kind, hsn_sac_code, gst_rate, itc_available,
+          id, name, kind, category_name, subcategory_name, hsn_sac_code, gst_rate, itc_available,
           purchase_account_id, sales_account_id, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `, [row.id, row.name, row.kind, row.hsn_sac_code, row.gst_rate,
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `, [row.id, row.name, row.kind, row.category_name || '', row.subcategory_name || '', row.hsn_sac_code, row.gst_rate,
         row.itc_available, row.purchase_account_id, row.sales_account_id,
         row.created_at, row.updated_at]);
       for (const row of backup.data.fixed_assets || []) exec(`
@@ -2042,6 +2220,15 @@ function replaceData(backup) {
         INSERT INTO settings (key, value) VALUES (?, ?)
         ON CONFLICT(key) DO UPDATE SET value = excluded.value
       `, ['schema_version', String(SCHEMA_VERSION)]);
+      const adjustmentSubhead = one('SELECT id FROM subhead_accounts WHERE code = ?', ['302100']);
+      if (adjustmentSubhead && !one('SELECT 1 AS yes FROM accounts WHERE code = ?', [OPENING_ADJUSTMENT_CODE])) {
+        exec('INSERT INTO accounts (id, code, name, subhead_id) VALUES (?, ?, ?, ?)', [
+          crypto.randomUUID(),
+          OPENING_ADJUSTMENT_CODE,
+          'Opening Balance Adjustment Account',
+          adjustmentSubhead.id
+        ]);
+      }
     });
   } finally {
     exec('PRAGMA foreign_keys = ON');
@@ -2076,6 +2263,7 @@ const handlers = {
   reportTrialBalance,
   reportFixedAssetRegister,
   reportFixedAssetSchedule,
+  reportStockSummary,
   postFixedAssetDepreciation,
   reportBalanceSheet,
   reportTag,

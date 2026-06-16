@@ -161,6 +161,30 @@ button.danger:hover {
   white-space: nowrap;
 }
 
+.install-notice {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  max-width: 420px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+
+.install-notice span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.35;
+}
+
+.install-notice button {
+  flex: 0 0 auto;
+}
+
 h1,
 h2 {
   margin: 0;
@@ -871,6 +895,11 @@ textarea {
   .topbar {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .install-notice {
+    width: 100%;
+    justify-content: space-between;
   }
 
   .nav-tabs {

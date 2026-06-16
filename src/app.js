@@ -2,7 +2,9 @@ import { dbCall } from './db-client.js';
 import { decryptBackup, encryptBackup } from './crypto.js';
 
 const moneyFormatter = new Intl.NumberFormat('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const quantityFormatter = new Intl.NumberFormat('en-IN', { maximumFractionDigits: 3 });
 const appLocale = 'en-IN';
+const APP_VERSION = 'v23';
 const indiaStates = [
   ['AP', 'Andhra Pradesh'],
   ['AR', 'Arunachal Pradesh'],
@@ -64,7 +66,8 @@ const state = {
   reportDatesInitialized: false,
   voucherReportReturn: null,
   serviceWorkerReloaded: sessionStorage.getItem('fame-sw-reloaded') === '1',
-  installPrompt: null
+  installPrompt: null,
+  installMode: null
 };
 
 const els = {
@@ -105,6 +108,9 @@ const els = {
   accountEntryCode: document.querySelector('#accountEntryCode'),
   accountEntryName: document.querySelector('#accountEntryName'),
   accountEntryTags: document.querySelector('#accountEntryTags'),
+  accountOpeningFields: document.querySelector('#accountOpeningFields'),
+  accountOpeningBalance: document.querySelector('#accountOpeningBalance'),
+  accountOpeningSide: document.querySelector('#accountOpeningSide'),
   accountIsPersonal: document.querySelector('#accountIsPersonal'),
   accountPersonalFields: document.querySelector('#accountPersonalFields'),
   accountGstNo: document.querySelector('#accountGstNo'),
@@ -146,6 +152,8 @@ const els = {
   productId: document.querySelector('#productId'),
   productName: document.querySelector('#productName'),
   productKind: document.querySelector('#productKind'),
+  productCategory: document.querySelector('#productCategory'),
+  productSubcategory: document.querySelector('#productSubcategory'),
   productHsnSac: document.querySelector('#productHsnSac'),
   productGstRate: document.querySelector('#productGstRate'),
   productItcAvailable: document.querySelector('#productItcAvailable'),
@@ -224,6 +232,8 @@ const els = {
   companyGstEnabled: document.querySelector('#companyGstEnabled'),
   newCompany: document.querySelector('#newCompany'),
   gstLockNote: document.querySelector('#gstLockNote'),
+  installNotice: document.querySelector('#installNotice'),
+  installNoticeText: document.querySelector('#installNoticeText'),
   installButton: document.querySelector('#installButton'),
   toast: document.querySelector('#toast')
 };
@@ -234,6 +244,10 @@ function minorToMoney(value) {
 
 function minorToNumber(value) {
   return Number(value || 0) / 100;
+}
+
+function formatQuantity(value) {
+  return quantityFormatter.format(Number(value || 0));
 }
 
 function formatDate(value) {
@@ -366,6 +380,26 @@ function moneyToMinor(value) {
   return Number.isFinite(numeric) && numeric > 0 ? Math.round(numeric * 100) : 0;
 }
 
+function signedOpeningBalanceMinor() {
+  const amountMinor = moneyToMinor(els.accountOpeningBalance.value);
+  return els.accountOpeningSide.value === 'credit' ? -amountMinor : amountMinor;
+}
+
+function setOpeningBalanceInputs(value) {
+  const amountMinor = Number(value || 0);
+  els.accountOpeningSide.value = amountMinor < 0 ? 'credit' : 'debit';
+  els.accountOpeningBalance.value = Math.abs(amountMinor) ? minorToMoney(Math.abs(amountMinor)) : '';
+}
+
+function isBalanceSheetType(typeId) {
+  return ['asset', 'liability', 'equity'].includes(typeId);
+}
+
+function currentAccountTypeId() {
+  return state.subheads.find((subhead) => subhead.id === els.accountEntrySubhead.value)?.typeId
+    || els.accountEntryType.value;
+}
+
 function selectedValues(select) {
   return [...select.selectedOptions].map((option) => option.value).filter(Boolean);
 }
@@ -375,6 +409,42 @@ function showToast(message) {
   els.toast.classList.remove('hidden');
   clearTimeout(showToast.timer);
   showToast.timer = setTimeout(() => els.toast.classList.add('hidden'), 3200);
+}
+
+function isStandaloneApp() {
+  return window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true;
+}
+
+function setInstallNotice(mode, message, buttonText) {
+  state.installMode = mode;
+  els.installNoticeText.textContent = message;
+  els.installButton.textContent = buttonText;
+  els.installNotice.classList.remove('hidden');
+}
+
+function hideInstallNotice() {
+  state.installMode = null;
+  els.installNotice.classList.add('hidden');
+}
+
+function renderInstallNotice() {
+  if (isStandaloneApp()) {
+    hideInstallNotice();
+    return;
+  }
+  if (state.installPrompt) {
+    setInstallNotice('install', 'Install F.A.M.E for desktop and offline use.', 'Install App');
+    return;
+  }
+  if (localStorage.getItem('fame-install-reminder-version') !== APP_VERSION) {
+    setInstallNotice('guide', 'Install F.A.M.E for desktop and offline use.', 'Install App');
+    return;
+  }
+  hideInstallNotice();
+}
+
+function showUpdateNotice() {
+  setInstallNotice('update', 'A new version is ready. Update F.A.M.E now.', 'Update App');
 }
 
 function renderOptions(select, rows, { label, value = (row) => row.id, empty = null, selected = null } = {}) {
@@ -521,7 +591,11 @@ function clearCoaForm(level) {
   controls.code.disabled = false;
   if (controls.subhead) controls.subhead.disabled = false;
   renderCoaMasters();
-  if (level === 'account') renderAccountPersonalFields();
+  if (level === 'account') {
+    setOpeningBalanceInputs(0);
+    renderAccountPersonalFields();
+    renderAccountOpeningFields();
+  }
 }
 
 function renderCoaMasters() {
@@ -539,6 +613,7 @@ function renderCoaMasters() {
   if (!els.headItemId.value) suggestCode('head', coaForms.head()).catch(() => undefined);
   if (!els.subheadItemId.value) suggestCode('subhead', coaForms.subhead()).catch(() => undefined);
   if (!els.accountItemId.value) suggestCode('account', coaForms.account()).catch(() => undefined);
+  renderAccountOpeningFields();
 }
 
 function fillCoaForm(row) {
@@ -570,7 +645,9 @@ function fillCoaForm(row) {
     controls.registration2.value = row.registration2 || '';
     controls.registration3.value = row.registration3 || '';
     controls.state.value = row.state || '';
+    setOpeningBalanceInputs(row.openingBalanceMinor || 0);
     renderAccountPersonalFields();
+    renderAccountOpeningFields();
   }
   renderTagOptions(controls.tags, currentCoaTagIds(row.level, row.id));
   const lockAccountStructure = row.level === 'account' && (row.hasTransactions || row.isSystem);
@@ -582,6 +659,15 @@ function fillCoaForm(row) {
 
 function renderAccountPersonalFields() {
   els.accountPersonalFields.classList.toggle('hidden', !els.accountIsPersonal.checked);
+}
+
+function renderAccountOpeningFields() {
+  const systemAdjustment = els.accountEntryCode.value === '302102';
+  const showOpening = isBalanceSheetType(currentAccountTypeId());
+  els.accountOpeningFields.classList.toggle('hidden', !showOpening);
+  els.accountOpeningBalance.disabled = systemAdjustment;
+  els.accountOpeningSide.disabled = systemAdjustment;
+  if (!showOpening) setOpeningBalanceInputs(0);
 }
 
 function renderCompanyMaster() {
@@ -604,9 +690,18 @@ function renderCompanyMaster() {
 function clearProductForm() {
   els.productForm.reset();
   els.productId.value = '';
+  els.productCategory.value = '';
+  els.productSubcategory.value = '';
   els.productGstRate.value = '0';
   els.productItcAvailable.checked = true;
   els.deleteProduct.disabled = true;
+  renderProductKindFields();
+}
+
+function renderProductKindFields() {
+  document.querySelectorAll('.product-stock-field').forEach((element) => {
+    element.classList.toggle('hidden', els.productKind.value !== 'product');
+  });
 }
 
 function renderProductMaster() {
@@ -617,15 +712,18 @@ function renderProductMaster() {
   document.querySelectorAll('.product-gst-field').forEach((element) => {
     element.classList.toggle('hidden', !state.company.gstEnabled);
   });
+  renderProductKindFields();
   renderOptions(els.productPurchaseAccount, purchaseAccounts, { label: accountLabel });
   renderOptions(els.productSalesAccount, salesAccounts, { label: accountLabel });
   if (purchaseAccounts.some((account) => account.id === selectedPurchase)) els.productPurchaseAccount.value = selectedPurchase;
   if (salesAccounts.some((account) => account.id === selectedSales)) els.productSalesAccount.value = selectedSales;
   els.productList.innerHTML = state.products.length
     ? state.products.map((product) => `
-        <button class="product-row" type="button" data-product-id="${product.id}">
-          <strong>${escapeHtml(product.name)}</strong>
-          <span>${escapeHtml(product.kind)}${state.company.gstEnabled
+      <button class="product-row" type="button" data-product-id="${product.id}">
+        <strong>${escapeHtml(product.name)}</strong>
+          <span>${escapeHtml(product.kind)}${product.kind === 'product'
+            ? ` | ${escapeHtml(product.categoryName || 'Uncategorised')} / ${escapeHtml(product.subcategoryName || 'General')}`
+            : ''}${state.company.gstEnabled
             ? ` | ${escapeHtml(product.hsnSacCode || 'No HSN/SAC')} | GST ${product.gstRate}%`
             : ''}</span>
         </button>
@@ -638,12 +736,15 @@ function renderProductMaster() {
       els.productId.value = product.id;
       els.productName.value = product.name;
       els.productKind.value = product.kind;
+      els.productCategory.value = product.categoryName || '';
+      els.productSubcategory.value = product.subcategoryName || '';
       els.productHsnSac.value = product.hsnSacCode || '';
       els.productGstRate.value = product.gstRate;
       els.productItcAvailable.checked = Boolean(product.itcAvailable);
       els.productPurchaseAccount.value = product.purchaseAccountId;
       els.productSalesAccount.value = product.salesAccountId;
       els.deleteProduct.disabled = false;
+      renderProductKindFields();
     });
   });
   if (!els.productId.value) els.deleteProduct.disabled = true;
@@ -1209,6 +1310,68 @@ function renderFixedAssetSchedule(data) {
   };
 }
 
+function renderStockSummary(data) {
+  els.reportTitle.textContent = 'Stock Summary';
+  els.reportMeta.textContent = dateRangeLabel(dateInputValue(els.reportFromDate), dateInputValue(els.reportToDate));
+  reportKpis([
+    { label: 'Opening Qty', value: formatQuantity(data.totals.openingQuantity) },
+    { label: 'Inward Qty', value: formatQuantity(data.totals.inwardQuantity) },
+    { label: 'Outward Qty', value: formatQuantity(data.totals.outwardQuantity) },
+    { label: 'Closing Qty', value: formatQuantity(data.totals.closingQuantity) }
+  ]);
+  const headers = [
+    { label: 'Sl.No.', amount: true },
+    { label: 'Category' },
+    { label: 'Sub-category' },
+    { label: 'Product' },
+    { label: 'Opening Qty', amount: true },
+    { label: 'Inward Qty', amount: true },
+    { label: 'Outward Qty', amount: true },
+    { label: 'Closing Qty', amount: true }
+  ];
+  const body = data.rows.length
+    ? data.rows.map((row) => `
+        <tr>
+          <td class="amount">${row.slNo}</td>
+          <td>${escapeHtml(row.categoryName)}</td>
+          <td>${escapeHtml(row.subcategoryName)}</td>
+          <td>${escapeHtml(row.productName)}</td>
+          <td class="amount">${formatQuantity(row.openingQuantity)}</td>
+          <td class="amount">${formatQuantity(row.inwardQuantity)}</td>
+          <td class="amount">${formatQuantity(row.outwardQuantity)}</td>
+          <td class="amount">${formatQuantity(row.closingQuantity)}</td>
+        </tr>
+      `).join('') + `
+        <tr class="report-total-row">
+          <td colspan="4">Total</td>
+          <td class="amount">${formatQuantity(data.totals.openingQuantity)}</td>
+          <td class="amount">${formatQuantity(data.totals.inwardQuantity)}</td>
+          <td class="amount">${formatQuantity(data.totals.outwardQuantity)}</td>
+          <td class="amount">${formatQuantity(data.totals.closingQuantity)}</td>
+        </tr>
+      `
+    : '<tr><td colspan="8" class="empty">No product masters available for stock reporting.</td></tr>';
+  els.reportContent.innerHTML = reportTable(headers, body);
+  state.reportExport = {
+    title: els.reportTitle.textContent,
+    meta: els.reportMeta.textContent,
+    headers: headers.map((header) => header.label),
+    rows: [
+      ...data.rows.map((row) => [
+        row.slNo,
+        row.categoryName,
+        row.subcategoryName,
+        row.productName,
+        row.openingQuantity,
+        row.inwardQuantity,
+        row.outwardQuantity,
+        row.closingQuantity
+      ]),
+      ['Total', '', '', '', data.totals.openingQuantity, data.totals.inwardQuantity, data.totals.outwardQuantity, data.totals.closingQuantity]
+    ]
+  };
+}
+
 function renderBalanceSheet(data) {
   const assets = statementSection('Assets', data.rows.filter((row) => row.typeId === 'asset'));
   const liabilities = statementSection('Liabilities', data.rows.filter((row) => row.typeId === 'liability'));
@@ -1326,6 +1489,8 @@ async function runReport() {
     renderProfitLoss(await dbCall('reportProfitLoss', { fromDate, toDate }));
   } else if (state.activeReport === 'trialBalance') {
     renderTrialBalance(await dbCall('reportTrialBalance', { asOfDate }));
+  } else if (state.activeReport === 'stockSummary') {
+    renderStockSummary(await dbCall('reportStockSummary', { fromDate, toDate }));
   } else if (state.activeReport === 'fixedAssetRegister') {
     renderFixedAssetRegister(await dbCall('reportFixedAssetRegister', { asOfDate }));
   } else if (state.activeReport === 'fixedAssetSchedule') {
@@ -1931,6 +2096,9 @@ async function saveCoaForm(level) {
     code: controls.code.value,
     name: controls.name.value,
     tagIds: selectedValues(controls.tags),
+    openingBalanceMinor: level === 'account' && isBalanceSheetType(currentAccountTypeId())
+      ? signedOpeningBalanceMinor()
+      : 0,
     isPersonal: controls.isPersonal?.checked || false,
     gstNo: controls.gstNo?.value,
     panNo: controls.panNo?.value,
@@ -1991,13 +2159,19 @@ function bindEvents() {
   els.accountEntryType.addEventListener('change', () => {
     renderHeadOptions(els.accountEntryHead, els.accountEntryType.value);
     renderSubheadOptions(els.accountEntrySubhead, els.accountEntryHead.value);
+    renderAccountOpeningFields();
     suggestCode('account', coaForms.account()).catch(() => undefined);
   });
   els.accountEntryHead.addEventListener('change', () => {
     renderSubheadOptions(els.accountEntrySubhead, els.accountEntryHead.value);
+    renderAccountOpeningFields();
     suggestCode('account', coaForms.account()).catch(() => undefined);
   });
-  els.accountEntrySubhead.addEventListener('change', () => suggestCode('account', coaForms.account()).catch(() => undefined));
+  els.accountEntrySubhead.addEventListener('change', () => {
+    renderAccountOpeningFields();
+    suggestCode('account', coaForms.account()).catch(() => undefined);
+  });
+  els.accountEntryCode.addEventListener('input', renderAccountOpeningFields);
   els.accountIsPersonal.addEventListener('change', renderAccountPersonalFields);
   els.clearHead.addEventListener('click', () => clearCoaForm('head'));
   els.clearSubhead.addEventListener('click', () => clearCoaForm('subhead'));
@@ -2082,6 +2256,8 @@ function bindEvents() {
       id: els.productId.value || null,
       name: els.productName.value,
       kind: els.productKind.value,
+      categoryName: els.productCategory.value,
+      subcategoryName: els.productSubcategory.value,
       hsnSacCode: els.productHsnSac.value,
       gstRate: els.productGstRate.value,
       itcAvailable: els.productItcAvailable.checked,
@@ -2092,6 +2268,7 @@ function bindEvents() {
     clearProductForm();
     showToast('Product / service saved.');
   });
+  els.productKind.addEventListener('change', renderProductKindFields);
   els.clearProduct.addEventListener('click', clearProductForm);
   els.deleteProduct.addEventListener('click', async () => {
     if (!els.productId.value) return showToast('Select a product or service first.');
@@ -2142,30 +2319,58 @@ function bindEvents() {
   window.addEventListener('beforeinstallprompt', (event) => {
     event.preventDefault();
     state.installPrompt = event;
-    els.installButton.classList.remove('hidden');
+    renderInstallNotice();
   });
   els.installButton.addEventListener('click', async () => {
-    if (!state.installPrompt) return;
-    state.installPrompt.prompt();
-    await state.installPrompt.userChoice;
-    state.installPrompt = null;
-    els.installButton.classList.add('hidden');
+    if (state.installMode === 'update') {
+      window.location.reload();
+      return;
+    }
+    if (state.installPrompt) {
+      state.installPrompt.prompt();
+      await state.installPrompt.userChoice;
+      state.installPrompt = null;
+      localStorage.setItem('fame-install-reminder-version', APP_VERSION);
+      renderInstallNotice();
+      return;
+    }
+    localStorage.setItem('fame-install-reminder-version', APP_VERSION);
+    showToast('Use the browser menu or address-bar install icon to install F.A.M.E.');
+    renderInstallNotice();
   });
 }
 
 async function prepareServiceWorker() {
   if (!('serviceWorker' in navigator)) return true;
   try {
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if (!state.serviceWorkerReloaded) return;
+      showUpdateNotice();
+    });
+    const handleRegistration = (registration) => {
+      if (registration.waiting && navigator.serviceWorker.controller) showUpdateNotice();
+      registration.addEventListener('updatefound', () => {
+        const worker = registration.installing;
+        if (!worker) return;
+        worker.addEventListener('statechange', () => {
+          if (worker.state === 'installed' && navigator.serviceWorker.controller) showUpdateNotice();
+        });
+      });
+    };
     if (window.crossOriginIsolated) {
       navigator.serviceWorker
         .register(`${import.meta.env.BASE_URL}sw.js`, { scope: import.meta.env.BASE_URL })
+        .then(handleRegistration)
         .catch((error) => console.warn('Service worker registration failed', error));
       return true;
     }
     if (!state.serviceWorkerReloaded) {
       const readyOrTimeout = navigator.serviceWorker
         .register(`${import.meta.env.BASE_URL}sw.js`, { scope: import.meta.env.BASE_URL })
-        .then(() => Promise.race([navigator.serviceWorker.ready, new Promise((resolve) => setTimeout(resolve, 2500))]))
+        .then((registration) => {
+          handleRegistration(registration);
+          return Promise.race([navigator.serviceWorker.ready, new Promise((resolve) => setTimeout(resolve, 2500))]);
+        })
         .catch((error) => console.warn('Service worker registration failed', error));
       readyOrTimeout.finally(() => {
         sessionStorage.setItem('fame-sw-reloaded', '1');
@@ -2175,6 +2380,7 @@ async function prepareServiceWorker() {
     }
     navigator.serviceWorker
       .register(`${import.meta.env.BASE_URL}sw.js`, { scope: import.meta.env.BASE_URL })
+      .then(handleRegistration)
       .catch((error) => console.warn('Service worker registration failed', error));
   } catch (error) {
     console.warn('Service worker registration failed', error);
@@ -2200,6 +2406,7 @@ async function boot() {
   renderStateOptions(els.accountState);
   renderStateOptions(els.companyState);
   bindEvents();
+  renderInstallNotice();
   setDateInputValue(els.voucherDate, todayIso());
   setDateInputValue(els.reportToDate, todayIso());
   setDateInputValue(els.reportAsOfDate, todayIso());

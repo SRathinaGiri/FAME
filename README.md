@@ -2,6 +2,35 @@
 
 Financial Accounting under Modern Environment.
 
+## Install F.A.M.E
+
+End users do not need to download the source code, install Node.js, or run
+commands.
+
+1. Open [F.A.M.E](https://srathingiri.github.io/FAME/) in Google Chrome or
+   Microsoft Edge. These browsers are recommended for installation.
+2. Install the application using one of these options:
+   - Click **Install F.A.M.E** if the button appears inside F.A.M.E.
+   - In Edge, click the **App available** icon in the address bar, or open
+     **... > Apps > Install F.A.M.E**.
+   - In Chrome, click the install icon in the address bar, or open the browser
+     menu and select **Install F.A.M.E**.
+3. Launch F.A.M.E from the desktop, Start menu, or home screen like a normal
+   application.
+
+After the first successful load, the installed PWA can work offline. Application
+data is stored locally on the user's device, so encrypted backups should be
+created regularly.
+
+Firefox installation support depends on the operating system and Firefox
+version. Its browser menu or address bar may provide a web-app installation
+option, but F.A.M.E's own install button may not appear. Use Chrome or Edge for
+the simplest installation experience.
+
+Downloading the GitHub source code is only necessary for developers. Do not
+double-click `index.html`; browser security prevents the SQLite WASM module and
+its database worker from running from a `file://` URL.
+
 F.A.M.E is a local-first accounting PWA built as a self-contained browser app. The first module includes:
 
 - PWA shell and offline cache
