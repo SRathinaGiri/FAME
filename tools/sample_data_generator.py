@@ -624,7 +624,7 @@ class Generator:
 
     def add_invoice(self, voucher_type: str, value: date, product: dict, party: dict, taxable: int) -> dict:
         cgst, sgst, igst, total = self.tax_split(taxable, float(product["gst_rate"]), party["state"])
-        invoice_no = f"{voucher_type.upper()}-{value.strftime('%Y%m%d')}-{self.random.randint(100,999)}"
+        invoice_no = None if voucher_type == "sales" else f"{voucher_type.upper()}-{value.strftime('%Y%m%d')}-{self.random.randint(100,999)}"
         if voucher_type in {"purchase", "expense"}:
             lines = [(product["purchase_account_id"], product["name"], taxable, 0)]
             if self.config.gst_enabled:
@@ -717,9 +717,9 @@ class Generator:
                 sale_date,
                 lines,
                 party_id=customer["id"],
-                invoice_no=f"FAS-{sale_date.strftime('%Y%m%d')}",
                 narration=narration,
             )
+            self.add_voucher_tag(voucher["id"], "Fixed Assets")
             for period in depreciation_position["periods"]:
                 if not period["depreciation"]:
                     continue

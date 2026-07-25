@@ -4,7 +4,7 @@ import { decryptBackup, encryptBackup } from './crypto.js';
 const moneyFormatter = new Intl.NumberFormat('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const quantityFormatter = new Intl.NumberFormat('en-IN', { maximumFractionDigits: 3 });
 const appLocale = 'en-IN';
-const APP_VERSION = 'v28';
+const APP_VERSION = 'v29';
 const indiaStates = [
   ['AP', 'Andhra Pradesh'],
   ['AR', 'Arunachal Pradesh'],
@@ -186,7 +186,11 @@ const els = {
   voucherType: document.querySelector('#voucherType'),
   voucherDate: document.querySelector('#voucherDate'),
   referenceNo: document.querySelector('#referenceNo'),
+  invoiceNoField: document.querySelector('#invoiceNoField'),
+  invoiceNoLabel: document.querySelector('#invoiceNoLabel'),
   invoiceNo: document.querySelector('#invoiceNo'),
+  invoiceDateField: document.querySelector('#invoiceDateField'),
+  invoiceDateLabel: document.querySelector('#invoiceDateLabel'),
   invoiceDate: document.querySelector('#invoiceDate'),
   narration: document.querySelector('#narration'),
   voucherTags: document.querySelector('#voucherTags'),
@@ -267,6 +271,53 @@ function minorToMoney(value) {
 
 function minorToNumber(value) {
   return Number(value || 0) / 100;
+}
+
+function amountInWords(valueMinor) {
+  const ones = [
+    '', 'One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight', 'Nine',
+    'Ten', 'Eleven', 'Twelve', 'Thirteen', 'Fourteen', 'Fifteen', 'Sixteen',
+    'Seventeen', 'Eighteen', 'Nineteen'
+  ];
+  const tens = ['', '', 'Twenty', 'Thirty', 'Forty', 'Fifty', 'Sixty', 'Seventy', 'Eighty', 'Ninety'];
+  const belowThousand = (number) => {
+    const words = [];
+    if (number >= 100) {
+      words.push(`${ones[Math.floor(number / 100)]} Hundred`);
+      number %= 100;
+    }
+    if (number >= 20) {
+      words.push(`${tens[Math.floor(number / 10)]}${number % 10 ? ` ${ones[number % 10]}` : ''}`);
+    } else if (number > 0) {
+      words.push(ones[number]);
+    }
+    return words.join(' ');
+  };
+  const integerWords = (number) => {
+    if (!number) return 'Zero';
+    const parts = [];
+    const crore = Math.floor(number / 10000000);
+    if (crore) {
+      parts.push(`${integerWords(crore)} Crore`);
+      number %= 10000000;
+    }
+    const lakh = Math.floor(number / 100000);
+    if (lakh) {
+      parts.push(`${belowThousand(lakh)} Lakh`);
+      number %= 100000;
+    }
+    const thousand = Math.floor(number / 1000);
+    if (thousand) {
+      parts.push(`${belowThousand(thousand)} Thousand`);
+      number %= 1000;
+    }
+    if (number) parts.push(belowThousand(number));
+    return parts.join(' ');
+  };
+  const absoluteMinor = Math.abs(Math.round(Number(valueMinor || 0)));
+  const rupees = Math.floor(absoluteMinor / 100);
+  const paise = absoluteMinor % 100;
+  return `Rupees ${integerWords(rupees)}${paise ? ` and ${integerWords(paise)} Paise` : ''} Only`;
 }
 
 function formatQuantity(value) {
@@ -1039,12 +1090,14 @@ function renderTaxJournal(data) {
     { label: 'IGST', value: minorToMoney(data.totals.igstMinor) },
     { label: 'Total', value: minorToMoney(data.totals.totalMinor) }
   ]);
+  const showExternalDocument = data.type !== 'sales';
+  const documentHeader = data.type === 'purchase' ? 'Supplier Invoice' : 'Bill / Document';
   const body = data.rows.length
     ? data.rows.map((row) => `
         <tr>
           <td>${formatDate(row.voucherDate)}</td>
           <td>${voucherButton(row)}</td>
-          <td>${escapeHtml(row.invoiceNo || row.referenceNo || '')}</td>
+          ${showExternalDocument ? `<td>${escapeHtml(row.invoiceNo || row.referenceNo || '')}</td>` : ''}
           <td>${escapeHtml(row.partyCode ? `${row.partyCode} - ${row.partyName}` : '')}</td>
           <td>${escapeHtml(stateLabel(row.partyState))}</td>
           <td>${escapeHtml(row.productName)}</td>
@@ -1059,7 +1112,7 @@ function renderTaxJournal(data) {
         </tr>
       `).join('') + `
         <tr class="report-total-row">
-          <td colspan="9">Total</td>
+          <td colspan="${showExternalDocument ? 9 : 8}">Total</td>
           <td class="amount">${minorToMoney(data.totals.taxableMinor)}</td>
           <td class="amount">${minorToMoney(data.totals.cgstMinor)}</td>
           <td class="amount">${minorToMoney(data.totals.sgstMinor)}</td>
@@ -1067,11 +1120,11 @@ function renderTaxJournal(data) {
           <td class="amount">${minorToMoney(data.totals.totalMinor)}</td>
         </tr>
       `
-    : '<tr><td colspan="14" class="empty">No invoice items in this period.</td></tr>';
+    : `<tr><td colspan="${showExternalDocument ? 14 : 13}" class="empty">No invoice items in this period.</td></tr>`;
   const headers = [
     { label: 'Date' },
     { label: 'Voucher' },
-    { label: 'Invoice / Ref.' },
+    ...(showExternalDocument ? [{ label: documentHeader }] : []),
     { label: 'Party' },
     { label: 'State' },
     { label: 'Product / Service' },
@@ -1093,7 +1146,7 @@ function renderTaxJournal(data) {
       ...data.rows.map((row) => [
         formatDate(row.voucherDate),
         row.voucherNo,
-        row.invoiceNo || row.referenceNo || '',
+        ...(showExternalDocument ? [row.invoiceNo || row.referenceNo || ''] : []),
         row.partyCode ? `${row.partyCode} - ${row.partyName}` : '',
         stateLabel(row.partyState),
         row.productName,
@@ -1838,8 +1891,8 @@ async function buildInvoicePdf() {
   const pageWidth = document.internal.pageSize.getWidth();
   const margin = 40;
   const right = pageWidth - margin;
-  const invoiceNumber = voucher.invoiceNo || voucher.voucherNo;
-  const invoiceDate = voucher.invoiceDate || voucher.voucherDate;
+  const invoiceNumber = voucher.voucherNo;
+  const invoiceDate = voucher.voucherDate;
   const companyAddress = [company.address, stateLabel(company.state), company.country].filter(Boolean).join(', ');
   const partyAddress = [party.address, stateLabel(party.state)].filter(Boolean).join(', ');
 
@@ -1865,7 +1918,6 @@ async function buildInvoicePdf() {
   document.setFontSize(9);
   document.text(`Invoice No: ${invoiceNumber}`, right, 64, { align: 'right' });
   document.text(`Invoice Date: ${formatDate(invoiceDate)}`, right, 77, { align: 'right' });
-  document.text(`Voucher No: ${voucher.voucherNo}`, right, 90, { align: 'right' });
 
   document.setDrawColor(190, 198, 210);
   document.line(margin, 112, right, 112);
@@ -1925,6 +1977,10 @@ async function buildInvoicePdf() {
   });
 
   let y = document.lastAutoTable.finalY + 18;
+  if (y > document.internal.pageSize.getHeight() - 135) {
+    document.addPage();
+    y = 50;
+  }
   const summary = gstEnabled
     ? [
         ['Taxable Amount', totals.taxable],
@@ -1942,6 +1998,13 @@ async function buildInvoicePdf() {
     document.text(`Rs. ${minorToMoney(amount)}`, right, y, { align: 'right' });
     y += isTotal ? 18 : 14;
   });
+  document.setFont('helvetica', 'bold');
+  document.setFontSize(9);
+  document.text('Amount in words', margin, y);
+  document.setFont('helvetica', 'normal');
+  const amountWords = document.splitTextToSize(amountInWords(totals.total), pageWidth - margin * 2);
+  document.text(amountWords, margin, y + 13);
+  y += 13 + amountWords.length * 11;
   if (voucher.narration) {
     y += 8;
     document.setFont('helvetica', 'bold');
@@ -2006,6 +2069,12 @@ function renderVoucherMode() {
   els.fixedAssetSaleField.classList.toggle('hidden', !fixedAssetSale);
   els.addLine.classList.toggle('hidden', invoice);
   els.addInvoiceItem.classList.toggle('hidden', !invoice);
+  const salesInvoice = els.voucherType.value === 'sales';
+  const purchaseInvoice = els.voucherType.value === 'purchase';
+  els.invoiceNoField.classList.toggle('hidden', salesInvoice || !invoice);
+  els.invoiceDateField.classList.toggle('hidden', salesInvoice || !invoice);
+  els.invoiceNoLabel.textContent = purchaseInvoice ? 'Supplier Invoice No.' : 'Bill / Document No.';
+  els.invoiceDateLabel.textContent = purchaseInvoice ? 'Supplier Invoice Date' : 'Bill / Document Date';
   const savedSalesInvoice = state.editingVoucherId && els.voucherType.value === 'sales';
   els.printInvoice.classList.toggle('hidden', !savedSalesInvoice);
   els.downloadInvoicePdf.classList.toggle('hidden', !savedSalesInvoice);
@@ -2577,8 +2646,8 @@ function bindEvents() {
       type: els.voucherType.value,
       voucherDate: dateInputValue(els.voucherDate),
       referenceNo: els.referenceNo.value.trim(),
-      invoiceNo: els.invoiceNo.value.trim(),
-      invoiceDate: dateInputValue(els.invoiceDate),
+      invoiceNo: els.voucherType.value === 'sales' ? '' : els.invoiceNo.value.trim(),
+      invoiceDate: els.voucherType.value === 'sales' ? '' : dateInputValue(els.invoiceDate),
       narration: els.narration.value.trim(),
       partyAccountId: isInvoiceType() ? els.voucherParty.value : null,
       tagIds: selectedValues(els.voucherTags),

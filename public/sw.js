@@ -1,4 +1,4 @@
-const CACHE_NAME = 'fame-cache-v28';
+const CACHE_NAME = 'fame-cache-v29';
 const APP_SHELL = [
   './',
   './index.html',

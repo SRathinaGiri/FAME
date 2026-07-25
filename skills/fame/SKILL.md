@@ -46,6 +46,7 @@ Preserve double-entry and referential integrity:
 - Require every voucher's total debits to equal total credits.
 - Use voucher types: `receipt`, `payment`, `purchase`, `sales`, `expense`, `income`, and `journal`.
 - Keep voucher numbers unique and sequence them by type and financial year.
+- Use the generated sales voucher number as the sales invoice number. Keep a separate external invoice/document number only for purchases, expenses, and income where the source document comes from another party.
 - Require personal party accounts for purchase, sales, expense, and income invoices.
 - Do not change account structure after transactions exist except for permitted descriptive/personal fields.
 - Keep system accounts and their codes stable, especially cash/bank, inventory, GST controls, accumulated profit/loss, opening-balance adjustment, sales/purchase, fixed-asset, accumulated-depreciation, depreciation-expense, and disposal gain/loss accounts.
