@@ -178,6 +178,7 @@ class Generator:
         self.suppliers: list[dict] = []
         self.products: list[dict] = []
         self.fixed_assets: list[dict] = []
+        self.stock_quantity: dict[str, float] = {}
         try:
             fy_day, fy_month = (int(part) for part in config.financial_year_start.split("-", 1))
             date(2001, fy_month, fy_day)
@@ -247,10 +248,12 @@ class Generator:
         self.add_parties()
         self.add_accounting_tags()
         self.add_products()
+        self.sync_inventory_opening_balance()
         self.add_opening_capital()
         self.add_fixed_asset_purchases()
         self.add_transactions()
         self.add_asset_sales()
+        self.add_depreciation_journals()
         self.renumber_vouchers()
         return {
             "app": APP_NAME,
@@ -292,6 +295,7 @@ class Generator:
             "gst_no": self.fake_gstin(state) if personal and self.config.gst_enabled else "",
             "pan_no": self.fake_pan() if personal else "",
             "registration_1": "", "registration_2": "", "registration_3": "",
+            "address": self.fake_address(state) if personal else "",
             "state": state, "created_at": self.now, "updated_at": self.now
         }
         self.data["accounts"].append(row)
@@ -306,6 +310,18 @@ class Generator:
             "GJ": "24", "DL": "07", "RJ": "08", "WB": "19", "UP": "09"
         }.get(state_code, "33")
         return f"{state_no}{self.fake_pan()}1Z{self.random.randint(1,9)}"
+
+    def fake_address(self, state_code: str) -> str:
+        if self.faker:
+            return self.faker.address().replace("\n", ", ")
+        cities = {
+            "TN": "Chennai", "KA": "Bengaluru", "KL": "Kochi", "AP": "Vijayawada",
+            "TS": "Hyderabad", "MH": "Mumbai", "GJ": "Ahmedabad", "DL": "New Delhi",
+            "RJ": "Jaipur", "WB": "Kolkata", "UP": "Lucknow",
+        }
+        street = self.random.randint(1, 250)
+        area = self.random.choice(["Market Road", "Main Street", "Industrial Estate", "Nehru Nagar", "MG Road"])
+        return f"No. {street}, {area}, {cities.get(state_code, 'Chennai')} - {self.random.randint(100000, 999999)}"
 
     def add_company(self) -> None:
         self.data["company_master"].append({
@@ -449,6 +465,7 @@ class Generator:
             }
             self.data["products"].append(row)
             self.products.append(row)
+            self.stock_quantity[row["id"]] = float(opening_quantity)
         for name, sac, rate, purchase_code, sales_code in SERVICE_PRODUCTS:
             row = {
                 "id": self.uid(), "name": name, "kind": "service", "hsn_sac_code": sac,
@@ -462,6 +479,15 @@ class Generator:
             }
             self.data["products"].append(row)
             self.products.append(row)
+
+    def sync_inventory_opening_balance(self) -> None:
+        opening_value = sum(
+            int(product["opening_value_minor"])
+            for product in self.products
+            if product["kind"] == "product"
+        )
+        inventory_account = next(row for row in self.data["accounts"] if row["code"] == "103101")
+        inventory_account["opening_balance_minor"] = opening_value
 
     def add_opening_capital(self) -> None:
         value = self.start_date
@@ -611,6 +637,11 @@ class Generator:
             lines.append((party["id"], "Customer", total, 0))
         voucher = self.add_voucher(voucher_type, value, lines, party_id=party["id"], invoice_no=invoice_no)
         self.add_item(voucher["id"], product, taxable, party["state"])
+        if product["kind"] == "product":
+            if voucher_type in {"purchase", "expense"}:
+                self.stock_quantity[product["id"]] += 1
+            elif voucher_type == "sales":
+                self.stock_quantity[product["id"]] -= 1
         return voucher
 
     def add_fixed_asset_purchases(self) -> None:
@@ -708,17 +739,59 @@ class Generator:
             asset["sale_date"] = sale_date.isoformat()
             asset["sale_amount_minor"] = sale_value
 
+    def add_depreciation_journals(self) -> None:
+        current_fy_start = self.financial_year_start_for(self.end_date)
+        through_date = current_fy_start - timedelta(days=1)
+        for asset in self.fixed_assets:
+            if asset.get("sale_voucher_id") or date.fromisoformat(asset["purchase_date"]) > through_date:
+                continue
+            position = self.depreciation_position(asset, through_date)
+            for period in position["periods"]:
+                amount = int(period["depreciation"])
+                if amount <= 0:
+                    continue
+                narration = (
+                    f"Depreciation for {asset['name']}: "
+                    f"{period['active_from'].strftime('%d-%m-%Y')} to "
+                    f"{period['active_to'].strftime('%d-%m-%Y')}"
+                )
+                voucher = self.add_voucher(
+                    "journal",
+                    period["active_to"],
+                    [
+                        (self.account("502301"), narration, amount, 0),
+                        (self.account("104901"), narration, 0, amount),
+                    ],
+                    narration=narration,
+                )
+                self.data["fixed_asset_depreciation_entries"].append({
+                    "id": self.uid(),
+                    "asset_id": asset["id"],
+                    "voucher_id": voucher["id"],
+                    "posting_type": "journal",
+                    "financial_year_start": self.financial_year_start_for(period["active_to"]).isoformat(),
+                    "through_date": period["active_to"].isoformat(),
+                    "depreciation_days": period["active_days"],
+                    "amount_minor": amount,
+                    "created_at": self.now,
+                })
+
     def add_transactions(self) -> None:
-        for _ in range(self.config.transactions):
-            value = self.rand_date()
+        transaction_dates = sorted(self.rand_date() for _ in range(self.config.transactions))
+        for value in transaction_dates:
             pick = self.random.random()
-            product = self.random.choice(self.products)
             if pick < 0.38:
                 customer = self.random.choice(self.customers)
+                saleable = [
+                    product for product in self.products
+                    if product["kind"] == "service" or self.stock_quantity.get(product["id"], 0) >= 1
+                ]
+                product = self.random.choice(saleable)
                 taxable = self.money(self.random.randint(3000, 180000))
                 self.add_invoice("sales", value, product, customer, taxable)
             elif pick < 0.68:
                 supplier = self.random.choice(self.suppliers)
+                product = self.random.choice(self.products)
                 taxable = self.money(self.random.randint(5000, 220000))
                 self.add_invoice("purchase", value, product, supplier, taxable)
             elif pick < 0.80:
@@ -729,11 +802,16 @@ class Generator:
                 supplier = self.random.choice(self.suppliers)
                 amount = self.money(self.random.randint(2000, 150000))
                 self.add_voucher("payment", value, [(supplier["id"], "Supplier payment", amount, 0), (self.account("101201"), "Payment", 0, amount)])
-            elif pick < 0.97:
+            elif pick < 0.955:
                 supplier = self.random.choice(self.suppliers)
                 service = self.random.choice(SERVICE_PRODUCTS)
                 product_row = next(item for item in self.products if item["name"] == service[0])
                 self.add_invoice("expense", value, product_row, supplier, self.money(self.random.randint(1000, 30000)))
+            elif pick < 0.98:
+                customer = self.random.choice(self.customers)
+                service = self.random.choice(SERVICE_PRODUCTS)
+                product_row = next(item for item in self.products if item["name"] == service[0])
+                self.add_invoice("income", value, product_row, customer, self.money(self.random.randint(1000, 35000)))
             else:
                 amount = self.money(self.random.randint(1000, 25000))
                 self.add_voucher("journal", value, [(self.account("502101"), "Adjustment", amount, 0), (self.account("101201"), "Adjustment", 0, amount)])

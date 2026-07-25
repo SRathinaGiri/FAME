@@ -2501,12 +2501,12 @@ function replaceData(backup) {
       for (const row of backup.data.subhead_accounts || []) exec('INSERT INTO subhead_accounts (id, code, name, head_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)', [row.id, row.code, row.name, row.head_id, row.created_at, row.updated_at]);
       for (const row of backup.data.accounts || []) exec(`
         INSERT INTO accounts (
-          id, code, name, subhead_id, opening_balance_minor, is_personal, gst_no, pan_no,
+          id, code, name, subhead_id, opening_balance_minor, is_personal, address, gst_no, pan_no,
           registration_1, registration_2, registration_3, state, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `, [
         row.id, row.code, row.name, row.subhead_id, row.opening_balance_minor || 0, row.is_personal || 0,
-        row.gst_no || '', row.pan_no || '', row.registration_1 || '',
+        row.address || '', row.gst_no || '', row.pan_no || '', row.registration_1 || '',
         row.registration_2 || '', row.registration_3 || '', row.state || '',
         row.created_at, row.updated_at
       ]);

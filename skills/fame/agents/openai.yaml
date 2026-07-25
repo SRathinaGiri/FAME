@@ -1,0 +1,4 @@
+interface:
+  display_name: "FAME Development"
+  short_description: "Develop and validate the FAME accounting PWA"
+  default_prompt: "Use $fame to inspect and safely update the FAME accounting application."
