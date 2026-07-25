@@ -215,6 +215,7 @@ function ensureSchema() {
       registration_1 TEXT,
       registration_2 TEXT,
       registration_3 TEXT,
+      address TEXT,
       state TEXT,
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
       updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -376,6 +377,7 @@ function addColumnIfMissing(table, column, definition) {
 
 function migrateSchema() {
   addColumnIfMissing('accounts', 'opening_balance_minor', 'INTEGER NOT NULL DEFAULT 0');
+  addColumnIfMissing('accounts', 'address', "TEXT NOT NULL DEFAULT ''");
   addColumnIfMissing('company_master', 'stock_valuation_method', "TEXT NOT NULL DEFAULT 'weighted_average'");
   addColumnIfMissing('products', 'category_id', 'TEXT REFERENCES product_categories(id) ON DELETE RESTRICT');
   addColumnIfMissing('products', 'subcategory_id', 'TEXT REFERENCES product_subcategories(id) ON DELETE RESTRICT');
@@ -552,7 +554,7 @@ function listPostingAccounts() {
            a.opening_balance_minor AS storedOpeningBalanceMinor,
            a.is_personal AS isPersonal, a.gst_no AS gstNo, a.pan_no AS panNo,
            a.registration_1 AS registration1, a.registration_2 AS registration2,
-           a.registration_3 AS registration3, a.state,
+           a.registration_3 AS registration3, a.address, a.state,
            (a.code IN ('302101', '302102')) AS isSystem,
            a.created_at AS createdAt, a.updated_at AS updatedAt,
            EXISTS(SELECT 1 FROM voucher_lines vl WHERE vl.account_id = a.id) AS hasTransactions
@@ -1254,31 +1256,32 @@ async function saveCoaItem(item) {
       const personal = item.isPersonal ? 1 : 0;
       const personalFields = personal
         ? [
+            String(item.address || '').trim(),
             String(item.gstNo || '').trim(), String(item.panNo || '').trim(),
             String(item.registration1 || '').trim(), String(item.registration2 || '').trim(),
             String(item.registration3 || '').trim(), String(item.state || '').trim()
           ]
-        : ['', '', '', '', '', ''];
+        : ['', '', '', '', '', '', ''];
       const hasTx = item.id ? one('SELECT 1 AS yes FROM voucher_lines WHERE account_id = ? LIMIT 1', [item.id]) : null;
       if (item.id) {
         if (hasTx) exec(`
-          UPDATE accounts SET name = ?, opening_balance_minor = ?, is_personal = ?, gst_no = ?, pan_no = ?,
+          UPDATE accounts SET name = ?, opening_balance_minor = ?, is_personal = ?, address = ?, gst_no = ?, pan_no = ?,
             registration_1 = ?, registration_2 = ?, registration_3 = ?, state = ?,
             updated_at = CURRENT_TIMESTAMP
           WHERE id = ?
         `, [name, openingBalanceMinor, personal, ...personalFields, item.id]);
         else exec(`
           UPDATE accounts SET code = ?, name = ?, subhead_id = ?, opening_balance_minor = ?, is_personal = ?,
-            gst_no = ?, pan_no = ?, registration_1 = ?, registration_2 = ?,
+            address = ?, gst_no = ?, pan_no = ?, registration_1 = ?, registration_2 = ?,
             registration_3 = ?, state = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?
         `, [code, name, item.subheadId, openingBalanceMinor, personal, ...personalFields, item.id]);
       } else {
         item.id = crypto.randomUUID();
         exec(`
           INSERT INTO accounts (
-            id, code, name, subhead_id, opening_balance_minor, is_personal, gst_no, pan_no,
+            id, code, name, subhead_id, opening_balance_minor, is_personal, address, gst_no, pan_no,
             registration_1, registration_2, registration_3, state
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `, [item.id, code, name, item.subheadId, openingBalanceMinor, personal, ...personalFields]);
       }
       replaceCoaTagLinks('account', item.id, item.tagIds || []);

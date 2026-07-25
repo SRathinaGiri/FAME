@@ -243,6 +243,7 @@
                   Personal account
                 </label>
                 <div id="accountPersonalFields" class="form-grid nested-fields hidden">
+                  <label class="full-width">Address<textarea id="accountAddress" rows="3" autocomplete="street-address"></textarea></label>
                   <label>GST No.<input id="accountGstNo" autocomplete="off"></label>
                   <label>PAN<input id="accountPanNo" autocomplete="off"></label>
                   <label>Government Registration 1<input id="accountRegistration1" autocomplete="off"></label>
@@ -450,6 +451,8 @@
               <div class="action-row">
                 <button id="addLine" type="button" class="secondary">Add Line</button>
                 <button id="addInvoiceItem" type="button" class="secondary hidden">Add Product / Service</button>
+                <button id="printInvoice" type="button" class="secondary hidden">Print Invoice</button>
+                <button id="downloadInvoicePdf" type="button" class="secondary hidden">Download Invoice PDF</button>
                 <button id="deleteVoucher" type="button" class="secondary">Delete Voucher</button>
                 <button id="clearVoucher" type="button" class="secondary">New Voucher</button>
                 <button type="submit">Post Voucher</button>

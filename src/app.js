@@ -4,7 +4,7 @@ import { decryptBackup, encryptBackup } from './crypto.js';
 const moneyFormatter = new Intl.NumberFormat('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const quantityFormatter = new Intl.NumberFormat('en-IN', { maximumFractionDigits: 3 });
 const appLocale = 'en-IN';
-const APP_VERSION = 'v25';
+const APP_VERSION = 'v26';
 const indiaStates = [
   ['AP', 'Andhra Pradesh'],
   ['AR', 'Arunachal Pradesh'],
@@ -117,6 +117,7 @@ const els = {
   accountOpeningSide: document.querySelector('#accountOpeningSide'),
   accountIsPersonal: document.querySelector('#accountIsPersonal'),
   accountPersonalFields: document.querySelector('#accountPersonalFields'),
+  accountAddress: document.querySelector('#accountAddress'),
   accountGstNo: document.querySelector('#accountGstNo'),
   accountPanNo: document.querySelector('#accountPanNo'),
   accountRegistration1: document.querySelector('#accountRegistration1'),
@@ -213,6 +214,8 @@ const els = {
   invoiceItemEditor: document.querySelector('#invoiceItemEditor'),
   invoiceItems: document.querySelector('#invoiceItems'),
   addInvoiceItem: document.querySelector('#addInvoiceItem'),
+  printInvoice: document.querySelector('#printInvoice'),
+  downloadInvoicePdf: document.querySelector('#downloadInvoicePdf'),
   invoiceTaxableTotal: document.querySelector('#invoiceTaxableTotal'),
   invoiceCgstTotal: document.querySelector('#invoiceCgstTotal'),
   invoiceSgstTotal: document.querySelector('#invoiceSgstTotal'),
@@ -585,6 +588,7 @@ const coaForms = {
     name: els.accountEntryName,
     tags: els.accountEntryTags,
     isPersonal: els.accountIsPersonal,
+    address: els.accountAddress,
     gstNo: els.accountGstNo,
     panNo: els.accountPanNo,
     registration1: els.accountRegistration1,
@@ -659,6 +663,7 @@ function fillCoaForm(row) {
   controls.name.disabled = Boolean(row.isSystem);
   if (row.level === 'account') {
     controls.isPersonal.checked = Boolean(row.isPersonal);
+    controls.address.value = row.address || '';
     controls.gstNo.value = row.gstNo || '';
     controls.panNo.value = row.panNo || '';
     controls.registration1.value = row.registration1 || '';
@@ -1822,6 +1827,149 @@ async function exportCurrentReportPdf() {
   document.save(`${safeFilename(report.title)}-${todayIso()}.pdf`);
 }
 
+async function buildInvoicePdf() {
+  const voucher = state.vouchers.find((item) => item.id === state.editingVoucherId);
+  if (!voucher || voucher.type !== 'sales') throw new Error('Select a saved sales invoice first.');
+  const party = state.accounts.find((account) => account.id === voucher.partyAccountId) || {};
+  const company = state.company || {};
+  const gstEnabled = Boolean(company.gstEnabled);
+  const [{ jsPDF }, { default: autoTable }] = await Promise.all([import('jspdf'), import('jspdf-autotable')]);
+  const document = new jsPDF({ orientation: 'portrait', unit: 'pt', format: 'a4' });
+  const pageWidth = document.internal.pageSize.getWidth();
+  const margin = 40;
+  const right = pageWidth - margin;
+  const invoiceNumber = voucher.invoiceNo || voucher.voucherNo;
+  const invoiceDate = voucher.invoiceDate || voucher.voucherDate;
+  const companyAddress = [company.address, stateLabel(company.state), company.country].filter(Boolean).join(', ');
+  const partyAddress = [party.address, stateLabel(party.state)].filter(Boolean).join(', ');
+
+  document.setTextColor(23, 32, 47);
+  document.setFont('helvetica', 'bold');
+  document.setFontSize(18);
+  document.text(String(company.name || 'F.A.M.E'), margin, 46);
+  document.setFont('helvetica', 'normal');
+  document.setFontSize(9);
+  const companyLines = document.splitTextToSize(companyAddress || 'Company address not provided', 320);
+  document.text(companyLines, margin, 62);
+  let companyMetaY = 62 + companyLines.length * 11;
+  if (gstEnabled && company.gstNo) {
+    document.text(`GSTIN: ${company.gstNo}`, margin, companyMetaY);
+    companyMetaY += 11;
+  }
+  if (company.panNo) document.text(`PAN: ${company.panNo}`, margin, companyMetaY);
+
+  document.setFont('helvetica', 'bold');
+  document.setFontSize(17);
+  document.text(gstEnabled ? 'TAX INVOICE' : 'INVOICE', right, 46, { align: 'right' });
+  document.setFont('helvetica', 'normal');
+  document.setFontSize(9);
+  document.text(`Invoice No: ${invoiceNumber}`, right, 64, { align: 'right' });
+  document.text(`Invoice Date: ${formatDate(invoiceDate)}`, right, 77, { align: 'right' });
+  document.text(`Voucher No: ${voucher.voucherNo}`, right, 90, { align: 'right' });
+
+  document.setDrawColor(190, 198, 210);
+  document.line(margin, 112, right, 112);
+  document.setFont('helvetica', 'bold');
+  document.setFontSize(10);
+  document.text('BILL TO', margin, 132);
+  document.setFontSize(12);
+  document.text(String(party.name || 'Customer'), margin, 150);
+  document.setFont('helvetica', 'normal');
+  document.setFontSize(9);
+  const partyLines = document.splitTextToSize(partyAddress || 'Customer address not provided', 360);
+  document.text(partyLines, margin, 165);
+  let partyMetaY = 165 + partyLines.length * 11;
+  if (gstEnabled && party.gstNo) {
+    document.text(`GSTIN: ${party.gstNo}`, margin, partyMetaY);
+    partyMetaY += 11;
+  }
+  if (party.panNo) document.text(`PAN: ${party.panNo}`, margin, partyMetaY);
+
+  const headers = ['#', 'Product / Service', 'Qty'];
+  if (gstEnabled) headers.push('HSN/SAC', 'GST %');
+  headers.push('Taxable');
+  if (gstEnabled) headers.push('CGST', 'SGST', 'IGST');
+  headers.push('Total');
+  const items = voucher.items || [];
+  const body = items.map((item, index) => {
+    const row = [index + 1, item.productName, formatQuantity(item.quantity)];
+    if (gstEnabled) row.push(item.hsnSacCode || '', `${Number(item.gstRate || 0)}%`);
+    row.push(minorToMoney(item.taxableMinor));
+    if (gstEnabled) row.push(
+      item.cgstMinor ? minorToMoney(item.cgstMinor) : '',
+      item.sgstMinor ? minorToMoney(item.sgstMinor) : '',
+      item.igstMinor ? minorToMoney(item.igstMinor) : ''
+    );
+    row.push(minorToMoney(item.totalMinor));
+    return row;
+  });
+  const totals = items.reduce((sum, item) => ({
+    taxable: sum.taxable + Number(item.taxableMinor || 0),
+    cgst: sum.cgst + Number(item.cgstMinor || 0),
+    sgst: sum.sgst + Number(item.sgstMinor || 0),
+    igst: sum.igst + Number(item.igstMinor || 0),
+    total: sum.total + Number(item.totalMinor || 0)
+  }), { taxable: 0, cgst: 0, sgst: 0, igst: 0, total: 0 });
+  autoTable(document, {
+    startY: Math.max(210, partyMetaY + 14),
+    head: [headers],
+    body,
+    theme: 'grid',
+    styles: { fontSize: gstEnabled ? 7.5 : 9, cellPadding: 4 },
+    headStyles: { fillColor: [31, 58, 95] },
+    columnStyles: {
+      0: { halign: 'center', cellWidth: 24 },
+      [headers.length - 1]: { halign: 'right' }
+    },
+    margin: { left: margin, right: margin }
+  });
+
+  let y = document.lastAutoTable.finalY + 18;
+  const summary = gstEnabled
+    ? [
+        ['Taxable Amount', totals.taxable],
+        ['CGST', totals.cgst],
+        ['SGST', totals.sgst],
+        ['IGST', totals.igst],
+        ['Invoice Total', totals.total]
+      ]
+    : [['Invoice Total', totals.total]];
+  summary.forEach(([label, amount], index) => {
+    const isTotal = index === summary.length - 1;
+    document.setFont('helvetica', isTotal ? 'bold' : 'normal');
+    document.setFontSize(isTotal ? 11 : 9);
+    document.text(String(label), right - 130, y);
+    document.text(`Rs. ${minorToMoney(amount)}`, right, y, { align: 'right' });
+    y += isTotal ? 18 : 14;
+  });
+  if (voucher.narration) {
+    y += 8;
+    document.setFont('helvetica', 'bold');
+    document.setFontSize(9);
+    document.text('Notes', margin, y);
+    document.setFont('helvetica', 'normal');
+    document.text(document.splitTextToSize(voucher.narration, pageWidth - margin * 2), margin, y + 13);
+  }
+  document.setFont('helvetica', 'normal');
+  document.setFontSize(8);
+  document.setTextColor(102, 112, 133);
+  document.text('Computer-generated invoice', margin, document.internal.pageSize.getHeight() - 28);
+  return { document, filename: `${safeFilename(invoiceNumber || voucher.voucherNo)}.pdf` };
+}
+
+async function downloadInvoicePdf() {
+  const { document, filename } = await buildInvoicePdf();
+  document.save(filename);
+}
+
+async function printInvoice() {
+  const { document } = await buildInvoicePdf();
+  document.autoPrint();
+  const url = URL.createObjectURL(document.output('blob'));
+  window.open(url, '_blank', 'noopener,noreferrer');
+  setTimeout(() => URL.revokeObjectURL(url), 60000);
+}
+
 function lineDefaultsForType(type) {
   if (type === 'receipt') return [{ accountFilter: 'cashBank', lockedSide: 'debit', preferredCodes: ['101101', '101201'], selectFirst: true }, { lockedSide: 'credit' }];
   if (type === 'payment') return [{ accountFilter: 'cashBank', lockedSide: 'credit', preferredCodes: ['101101', '101201'], selectFirst: true }, { lockedSide: 'debit' }];
@@ -1858,6 +2006,9 @@ function renderVoucherMode() {
   els.fixedAssetSaleField.classList.toggle('hidden', !fixedAssetSale);
   els.addLine.classList.toggle('hidden', invoice);
   els.addInvoiceItem.classList.toggle('hidden', !invoice);
+  const savedSalesInvoice = state.editingVoucherId && els.voucherType.value === 'sales';
+  els.printInvoice.classList.toggle('hidden', !savedSalesInvoice);
+  els.downloadInvoicePdf.classList.toggle('hidden', !savedSalesInvoice);
   els.voucherPartyLabel.textContent = isOutwardInvoiceType() ? 'Customer' : 'Supplier';
   document.querySelectorAll('.invoice-gst-column').forEach((element) => element.classList.toggle('hidden', !gstEnabled));
   const selectedAssetAccount = els.fixedAssetAccount.value;
@@ -2295,6 +2446,7 @@ async function saveCoaForm(level) {
       ? signedOpeningBalanceMinor()
       : 0,
     isPersonal: controls.isPersonal?.checked || false,
+    address: controls.address?.value,
     gstNo: controls.gstNo?.value,
     panNo: controls.panNo?.value,
     registration1: controls.registration1?.value,
@@ -2407,6 +2559,8 @@ function bindEvents() {
   els.fixedAssetSaleSelect.addEventListener('change', updateInvoiceTotals);
   els.addLine.addEventListener('click', () => addVoucherLine(addedLineDefaultForType(els.voucherType.value)));
   els.addInvoiceItem.addEventListener('click', () => addInvoiceItem());
+  els.printInvoice.addEventListener('click', () => printInvoice().catch((error) => showToast(error.message)));
+  els.downloadInvoicePdf.addEventListener('click', () => downloadInvoicePdf().catch((error) => showToast(error.message)));
   els.clearVoucher.addEventListener('click', resetVoucherForm);
   els.voucherEditSelect.addEventListener('change', () => fillVoucherForm(els.voucherEditSelect.value));
   els.deleteVoucher.addEventListener('click', async () => {
