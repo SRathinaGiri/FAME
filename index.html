@@ -419,6 +419,30 @@
                   <tbody id="voucherLines"></tbody>
                 </table>
               </div>
+              <section id="settlementPanel" class="nested-fields hidden">
+                <div class="panel-heading">
+                  <div>
+                    <h3 id="settlementTitle">Bill Settlement</h3>
+                    <p class="field-note">Enter the amount to apply against each bill. Any balance left unapplied remains on account.</p>
+                  </div>
+                  <span id="settlementSummary" class="pill">Applied 0.00</span>
+                </div>
+                <div class="table-wrap">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Date</th>
+                        <th>Bill</th>
+                        <th>Type</th>
+                        <th class="amount">Original</th>
+                        <th class="amount">Outstanding</th>
+                        <th class="amount">Apply</th>
+                      </tr>
+                    </thead>
+                    <tbody id="settlementBills"></tbody>
+                  </table>
+                </div>
+              </section>
               <div id="invoiceItemEditor" class="table-wrap line-editor hidden">
                 <table>
                   <thead>
@@ -507,6 +531,7 @@
               </label>
               <div class="report-actions">
                 <button type="submit">Run</button>
+                <button id="autoAdjustFifo" type="button" class="secondary hidden">Auto Adjust FIFO</button>
                 <button id="postDepreciation" type="button" class="secondary hidden">Post Depreciation Through Date</button>
                 <button id="exportReportExcel" type="button" class="secondary">Excel</button>
                 <button id="exportReportPdf" type="button" class="secondary">PDF</button>

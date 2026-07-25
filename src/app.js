@@ -4,7 +4,7 @@ import { decryptBackup, encryptBackup } from './crypto.js';
 const moneyFormatter = new Intl.NumberFormat('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const quantityFormatter = new Intl.NumberFormat('en-IN', { maximumFractionDigits: 3 });
 const appLocale = 'en-IN';
-const APP_VERSION = 'v29';
+const APP_VERSION = 'v32';
 const indiaStates = [
   ['AP', 'Andhra Pradesh'],
   ['AR', 'Arunachal Pradesh'],
@@ -69,7 +69,8 @@ const state = {
   voucherReportReturn: null,
   serviceWorkerReloaded: sessionStorage.getItem('fame-sw-reloaded') === '1',
   installPrompt: null,
-  installMode: null
+  installMode: null,
+  settlementRequestId: 0
 };
 
 const els = {
@@ -146,6 +147,7 @@ const els = {
   reportContent: document.querySelector('#reportContent'),
   exportReportExcel: document.querySelector('#exportReportExcel'),
   exportReportPdf: document.querySelector('#exportReportPdf'),
+  autoAdjustFifo: document.querySelector('#autoAdjustFifo'),
   postDepreciation: document.querySelector('#postDepreciation'),
   reportDrilldown: document.querySelector('#reportDrilldown'),
   drilldownTitle: document.querySelector('#drilldownTitle'),
@@ -215,6 +217,10 @@ const els = {
   fixedAssetSaleSelect: document.querySelector('#fixedAssetSaleSelect'),
   voucherLineEditor: document.querySelector('#voucherLineEditor'),
   voucherLines: document.querySelector('#voucherLines'),
+  settlementPanel: document.querySelector('#settlementPanel'),
+  settlementTitle: document.querySelector('#settlementTitle'),
+  settlementSummary: document.querySelector('#settlementSummary'),
+  settlementBills: document.querySelector('#settlementBills'),
   invoiceItemEditor: document.querySelector('#invoiceItemEditor'),
   invoiceItems: document.querySelector('#invoiceItems'),
   addInvoiceItem: document.querySelector('#addInvoiceItem'),
@@ -1018,7 +1024,14 @@ function reportKpis(items) {
 }
 
 function voucherButton(row) {
-  return `<button class="report-link voucher-link" type="button" data-voucher-id="${row.voucherId}">${escapeHtml(row.voucherNo)}</button>`;
+  return `
+    <span class="report-voucher-actions">
+      <button class="report-link voucher-link" type="button" data-voucher-id="${row.voucherId}">${escapeHtml(row.voucherNo)}</button>
+      ${row.type === 'sales'
+        ? `<button class="report-link invoice-print-link" type="button" data-voucher-id="${row.voucherId}" title="Print invoice">Print</button>`
+        : ''}
+    </span>
+  `;
 }
 
 function accountButton(row) {
@@ -1035,6 +1048,11 @@ function bindReportLinks(container) {
       els.backToReport.classList.remove('hidden');
       fillVoucherForm(button.dataset.voucherId);
       switchView('entries');
+    });
+  });
+  container.querySelectorAll('.invoice-print-link').forEach((button) => {
+    button.addEventListener('click', () => {
+      printInvoice(button.dataset.voucherId).catch((error) => showToast(error.message));
     });
   });
 }
@@ -1200,8 +1218,17 @@ function renderLedger(data) {
   els.reportMeta.textContent = dateRangeLabel(dateInputValue(els.reportFromDate), dateInputValue(els.reportToDate));
   reportKpis([
     { label: 'Opening', value: balanceText(data.openingBalanceMinor) },
-    { label: 'Closing', value: balanceText(data.closingBalanceMinor) }
+    { label: 'Closing', value: balanceText(data.closingBalanceMinor) },
+    ...(data.billWise?.eligible ? [
+      { label: 'Unapplied', value: minorToMoney(data.billWise.unappliedMinor) },
+      { label: 'Bills Outstanding', value: minorToMoney(data.billWise.outstandingMinor) }
+    ] : [])
   ]);
+  const canAutoAdjust = Boolean(data.billWise?.unappliedMinor && data.billWise?.outstandingMinor);
+  els.autoAdjustFifo.classList.toggle('hidden', !canAutoAdjust);
+  els.autoAdjustFifo.title = canAutoAdjust
+    ? `${data.billWise.settlementCount} unapplied receipt/payment voucher(s); ${data.billWise.billCount} outstanding bill(s)`
+    : '';
   els.reportContent.innerHTML = ledgerTable(data);
   state.reportExport = {
     title: els.reportTitle.textContent,
@@ -1779,6 +1806,7 @@ function setReportType(type, run = true) {
   els.reportToField.classList.toggle('hidden', isAsOfReport);
   els.reportAsOfField.classList.toggle('hidden', !isAsOfReport);
   els.postDepreciation.classList.toggle('hidden', type !== 'fixedAssetSchedule');
+  els.autoAdjustFifo.classList.add('hidden');
   if (isTaxJournal) els.reportSummary.innerHTML = '';
   if (run) runReport().catch((error) => showToast(error.message));
 }
@@ -1880,8 +1908,8 @@ async function exportCurrentReportPdf() {
   document.save(`${safeFilename(report.title)}-${todayIso()}.pdf`);
 }
 
-async function buildInvoicePdf() {
-  const voucher = state.vouchers.find((item) => item.id === state.editingVoucherId);
+async function buildInvoicePdf(voucherId = state.editingVoucherId) {
+  const voucher = state.vouchers.find((item) => item.id === voucherId);
   if (!voucher || voucher.type !== 'sales') throw new Error('Select a saved sales invoice first.');
   const party = state.accounts.find((account) => account.id === voucher.partyAccountId) || {};
   const company = state.company || {};
@@ -1994,7 +2022,7 @@ async function buildInvoicePdf() {
     const isTotal = index === summary.length - 1;
     document.setFont('helvetica', isTotal ? 'bold' : 'normal');
     document.setFontSize(isTotal ? 11 : 9);
-    document.text(String(label), right - 130, y);
+    document.text(String(label), isTotal ? margin : right - 190, y);
     document.text(`Rs. ${minorToMoney(amount)}`, right, y, { align: 'right' });
     y += isTotal ? 18 : 14;
   });
@@ -2020,17 +2048,25 @@ async function buildInvoicePdf() {
   return { document, filename: `${safeFilename(invoiceNumber || voucher.voucherNo)}.pdf` };
 }
 
-async function downloadInvoicePdf() {
-  const { document, filename } = await buildInvoicePdf();
+async function downloadInvoicePdf(voucherId) {
+  const { document, filename } = await buildInvoicePdf(voucherId);
   document.save(filename);
 }
 
-async function printInvoice() {
-  const { document } = await buildInvoicePdf();
-  document.autoPrint();
-  const url = URL.createObjectURL(document.output('blob'));
-  window.open(url, '_blank', 'noopener,noreferrer');
-  setTimeout(() => URL.revokeObjectURL(url), 60000);
+async function printInvoice(voucherId) {
+  const printWindow = window.open('', '_blank');
+  if (!printWindow) throw new Error('Allow pop-ups to print the invoice.');
+  printWindow.opener = null;
+  try {
+    const { document } = await buildInvoicePdf(voucherId);
+    document.autoPrint();
+    const url = URL.createObjectURL(document.output('blob'));
+    printWindow.location.href = url;
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
+  } catch (error) {
+    printWindow.close();
+    throw error;
+  }
 }
 
 function lineDefaultsForType(type) {
@@ -2049,8 +2085,89 @@ function isOutwardInvoiceType(type = els.voucherType.value) {
   return type === 'sales' || type === 'income';
 }
 
+function isSettlementType(type = els.voucherType.value) {
+  return type === 'receipt' || type === 'payment';
+}
+
+function getSettlementAllocations() {
+  return [...els.settlementBills.querySelectorAll('tr[data-invoice-voucher-id]')]
+    .map((row) => ({
+      invoiceVoucherId: row.dataset.invoiceVoucherId,
+      amountMinor: moneyToMinor(row.querySelector('.settlement-amount').value)
+    }))
+    .filter((allocation) => allocation.amountMinor > 0);
+}
+
+function settlementVoucherAmountMinor() {
+  if (!isSettlementType() || !els.voucherParty.value) return 0;
+  return getVoucherLines()
+    .filter((line) => line.accountId === els.voucherParty.value)
+    .reduce((sum, line) => sum + Number(
+      els.voucherType.value === 'receipt' ? line.creditMinor : line.debitMinor
+    ), 0);
+}
+
+function updateSettlementSummary() {
+  if (!isSettlementType()) return;
+  const applied = getSettlementAllocations().reduce((sum, allocation) => sum + allocation.amountMinor, 0);
+  const amount = settlementVoucherAmountMinor();
+  els.settlementSummary.textContent = `Applied ${minorToMoney(applied)} | Unapplied ${minorToMoney(Math.max(0, amount - applied))}`;
+  els.settlementSummary.classList.toggle('danger', applied > amount);
+}
+
+function syncSettlementPartyLine() {
+  if (!isSettlementType() || !els.voucherParty.value) return;
+  const selector = els.voucherType.value === 'receipt' ? '.line-credit:not(:disabled)' : '.line-debit:not(:disabled)';
+  const row = [...els.voucherLines.querySelectorAll('tr')].find((candidate) => candidate.querySelector(selector));
+  if (!row) return;
+  row.querySelector('.line-account').value = els.voucherParty.value;
+  updateVoucherBalance();
+}
+
+async function loadOpenBills() {
+  const requestId = ++state.settlementRequestId;
+  if (!isSettlementType() || !els.voucherParty.value) {
+    els.settlementBills.innerHTML = '<tr><td colspan="6" class="empty">Select a customer or supplier to view unpaid bills.</td></tr>';
+    updateSettlementSummary();
+    return;
+  }
+  const bills = await dbCall('openBills', {
+    settlementType: els.voucherType.value,
+    partyAccountId: els.voucherParty.value,
+    settlementVoucherId: state.editingVoucherId || '',
+    settlementDate: dateInputValue(els.voucherDate)
+  });
+  if (requestId !== state.settlementRequestId) return;
+  els.settlementBills.innerHTML = bills.length
+    ? bills.map((bill) => `
+        <tr data-invoice-voucher-id="${bill.voucherId}">
+          <td>${formatDate(bill.voucherDate)}</td>
+          <td>${escapeHtml(bill.type === 'sales' || bill.type === 'income'
+            ? bill.voucherNo
+            : bill.externalInvoiceNo || bill.voucherNo)}</td>
+          <td class="capitalize">${escapeHtml(bill.type)}</td>
+          <td class="amount">${minorToMoney(bill.invoiceAmountMinor)}</td>
+          <td class="amount">${minorToMoney(bill.outstandingMinor)}</td>
+          <td><input class="settlement-amount amount-input" inputmode="decimal"
+            value="${bill.currentAllocationMinor ? minorToMoney(bill.currentAllocationMinor) : ''}"
+            placeholder="0.00" data-maximum-minor="${bill.outstandingMinor}"></td>
+        </tr>
+      `).join('')
+    : '<tr><td colspan="6" class="empty">No unpaid bills for this party as of the voucher date.</td></tr>';
+  els.settlementBills.querySelectorAll('.settlement-amount').forEach((input) => {
+    input.addEventListener('input', () => {
+      const maximum = Number(input.dataset.maximumMinor || 0);
+      const amount = moneyToMinor(input.value);
+      input.setCustomValidity(amount > maximum ? 'Amount exceeds this bill’s outstanding balance.' : '');
+      updateSettlementSummary();
+    });
+  });
+  updateSettlementSummary();
+}
+
 function renderVoucherMode() {
   const invoice = isInvoiceType();
+  const settlement = isSettlementType();
   const gstEnabled = Boolean(state.company.gstEnabled);
   const fixedAssetEligible = ['purchase', 'sales'].includes(els.voucherType.value);
   const fixedAssetEnabled = fixedAssetEligible && els.voucherFixedAsset.checked;
@@ -2058,7 +2175,8 @@ function renderVoucherMode() {
   const fixedAssetSale = fixedAssetEnabled && els.voucherType.value === 'sales';
   els.voucherLineEditor.classList.toggle('hidden', invoice);
   els.invoiceItemEditor.classList.toggle('hidden', !invoice);
-  els.voucherPartyField.classList.toggle('hidden', !invoice);
+  els.voucherPartyField.classList.toggle('hidden', !invoice && !settlement);
+  els.settlementPanel.classList.toggle('hidden', !settlement);
   els.fixedAssetToggleField.classList.toggle('hidden', !fixedAssetEligible);
   els.fixedAssetFields.classList.toggle('hidden', !fixedAssetEnabled);
   els.fixedAssetPurchaseNameField.classList.toggle('hidden', !fixedAssetPurchase);
@@ -2078,7 +2196,11 @@ function renderVoucherMode() {
   const savedSalesInvoice = state.editingVoucherId && els.voucherType.value === 'sales';
   els.printInvoice.classList.toggle('hidden', !savedSalesInvoice);
   els.downloadInvoicePdf.classList.toggle('hidden', !savedSalesInvoice);
-  els.voucherPartyLabel.textContent = isOutwardInvoiceType() ? 'Customer' : 'Supplier';
+  const customerSide = isOutwardInvoiceType() || els.voucherType.value === 'receipt';
+  els.voucherPartyLabel.textContent = customerSide ? 'Customer' : 'Supplier';
+  els.settlementTitle.textContent = els.voucherType.value === 'receipt'
+    ? 'Apply Receipt to Customer Invoices'
+    : 'Apply Payment to Supplier Bills';
   document.querySelectorAll('.invoice-gst-column').forEach((element) => element.classList.toggle('hidden', !gstEnabled));
   const selectedAssetAccount = els.fixedAssetAccount.value;
   renderOptions(els.fixedAssetAccount, fixedAssetAccounts(), { label: accountLabel, empty: 'Select fixed asset account' });
@@ -2092,15 +2214,15 @@ function renderVoucherMode() {
     empty: 'Select asset sold'
   });
   if (saleAssets.some((asset) => asset.id === selectedSoldAsset)) els.fixedAssetSaleSelect.value = selectedSoldAsset;
-  if (invoice) {
+  if (invoice || settlement) {
     const selectedParty = els.voucherParty.value;
-    const partyHeadCode = isOutwardInvoiceType() ? '102000' : '201000';
+    const partyHeadCode = customerSide ? '102000' : '201000';
     const parties = state.accounts.filter((account) =>
       account.isPersonal && !account.isSystem && account.headCode === partyHeadCode
     );
     renderOptions(els.voucherParty, parties, {
       label: (account) => `${accountLabel(account)}${account.state ? ` | ${stateLabel(account.state)}` : ''}`,
-      empty: `Select ${isOutwardInvoiceType() ? 'customer' : 'supplier'}`
+      empty: `Select ${customerSide ? 'customer' : 'supplier'}`
     });
     if (parties.some((account) => account.id === selectedParty)) els.voucherParty.value = selectedParty;
   }
@@ -2262,9 +2384,11 @@ function addVoucherLine(line = {}) {
 function resetVoucherLinesForType() {
   els.voucherLines.innerHTML = '';
   els.invoiceItems.innerHTML = '';
+  els.settlementBills.innerHTML = '';
   renderVoucherMode();
   if (isInvoiceType()) addInvoiceItem();
   else for (const line of lineDefaultsForType(els.voucherType.value)) addVoucherLine(line);
+  loadOpenBills().catch((error) => showToast(error.message));
 }
 
 function getVoucherLines() {
@@ -2283,6 +2407,7 @@ function updateVoucherBalance() {
   const credit = lines.reduce((sum, line) => sum + line.creditMinor, 0);
   els.voucherBalance.textContent = debit === credit ? `Balanced ${minorToMoney(debit)}` : `Difference ${minorToMoney(debit - credit)}`;
   els.voucherBalance.classList.toggle('danger', debit !== credit);
+  updateSettlementSummary();
 }
 
 function renderVoucherSelect() {
@@ -2324,9 +2449,12 @@ function fillVoucherForm(voucherId) {
   renderTagOptions(els.voucherTags, state.voucherTags[voucher.id] || []);
   els.voucherLines.innerHTML = '';
   els.invoiceItems.innerHTML = '';
+  els.settlementBills.innerHTML = '';
   renderVoucherMode();
-  if (isInvoiceType(voucher.type)) {
+  if (isInvoiceType(voucher.type) || isSettlementType(voucher.type)) {
     els.voucherParty.value = voucher.partyAccountId || '';
+  }
+  if (isInvoiceType(voucher.type)) {
     (voucher.items || []).forEach(addInvoiceItem);
     updateInvoiceTotals();
   } else {
@@ -2336,6 +2464,7 @@ function fillVoucherForm(voucherId) {
       debit: line.debitMinor ? minorToMoney(line.debitMinor) : '',
       credit: line.creditMinor ? minorToMoney(line.creditMinor) : ''
     }));
+    loadOpenBills().catch((error) => showToast(error.message));
   }
 }
 
@@ -2565,6 +2694,19 @@ function bindEvents() {
   });
   els.exportReportExcel.addEventListener('click', () => exportCurrentReportExcel().catch((error) => showToast(error.message)));
   els.exportReportPdf.addEventListener('click', () => exportCurrentReportPdf().catch((error) => showToast(error.message)));
+  els.autoAdjustFifo.addEventListener('click', async () => {
+    if (!els.reportAccount.value) return showToast('Select a customer or supplier account.');
+    if (!window.confirm('Apply all available receipts/payments to the oldest outstanding bills for this account using FIFO?')) return;
+    const result = await dbCall('autoAllocatePartySettlements', {
+      accountId: els.reportAccount.value,
+      throughDate: dateInputValue(els.reportToDate)
+    });
+    await refreshSnapshot();
+    await runReport();
+    showToast(result.allocationCount
+      ? `${result.allocationCount} FIFO allocation(s) applied for ${minorToMoney(result.amountMinor)}.`
+      : 'No matching unapplied amounts and outstanding bills were found.');
+  });
   els.postDepreciation.addEventListener('click', async () => {
     const result = await dbCall('postFixedAssetDepreciation', {
       asOfDate: dateInputValue(els.reportAsOfDate)
@@ -2622,7 +2764,17 @@ function bindEvents() {
   els.deleteAccount.addEventListener('click', () => deleteCoaForm('account'));
 
   els.voucherType.addEventListener('change', resetVoucherLinesForType);
-  els.voucherParty.addEventListener('change', updateInvoiceTotals);
+  els.voucherParty.addEventListener('change', () => {
+    if (isSettlementType()) {
+      syncSettlementPartyLine();
+      loadOpenBills().catch((error) => showToast(error.message));
+    } else {
+      updateInvoiceTotals();
+    }
+  });
+  els.voucherDate.addEventListener('change', () => {
+    if (isSettlementType()) loadOpenBills().catch((error) => showToast(error.message));
+  });
   els.voucherFixedAsset.addEventListener('change', renderVoucherMode);
   els.fixedAssetAccount.addEventListener('change', updateInvoiceTotals);
   els.fixedAssetSaleSelect.addEventListener('change', updateInvoiceTotals);
@@ -2641,6 +2793,7 @@ function bindEvents() {
   });
   els.voucherForm.addEventListener('submit', async (event) => {
     event.preventDefault();
+    const savedType = els.voucherType.value;
     const result = await dbCall('saveVoucher', {
       id: state.editingVoucherId,
       type: els.voucherType.value,
@@ -2649,15 +2802,21 @@ function bindEvents() {
       invoiceNo: els.voucherType.value === 'sales' ? '' : els.invoiceNo.value.trim(),
       invoiceDate: els.voucherType.value === 'sales' ? '' : dateInputValue(els.invoiceDate),
       narration: els.narration.value.trim(),
-      partyAccountId: isInvoiceType() ? els.voucherParty.value : null,
+      partyAccountId: isInvoiceType() || isSettlementType() ? els.voucherParty.value : null,
+      allocations: isSettlementType() ? getSettlementAllocations() : [],
       tagIds: selectedValues(els.voucherTags),
       lines: isInvoiceType() ? [] : getVoucherLines().filter((line) => line.accountId && (line.debitMinor || line.creditMinor)),
       items: isInvoiceType() ? getInvoiceItems() : [],
       fixedAsset: getFixedAssetPayload()
     });
     await refreshSnapshot();
-    resetVoucherForm();
-    showToast(result.id ? 'Voucher saved.' : 'Voucher saved.');
+    if (savedType === 'sales') {
+      fillVoucherForm(result.id);
+      showToast('Sales invoice saved. Use Print Invoice or Download Invoice PDF.');
+    } else {
+      resetVoucherForm();
+      showToast('Voucher saved.');
+    }
   });
 
   els.tagForm.addEventListener('submit', async (event) => {

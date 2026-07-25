@@ -41,6 +41,8 @@ F.A.M.E is a local-first accounting PWA built as a self-contained browser app. T
 - Tags for accounts, heading accounts, and vouchers
 - Product and service masters with HSN/SAC, GST rates, and ITC eligibility
 - GST-aware purchase and sales invoices with intra-state CGST/SGST and inter-state IGST
+- Bill-wise settlement of receipts against customer invoices and payments against supplier bills, including partial and multi-bill allocations
+- FIFO auto-adjustment of unapplied receipts/payments from customer and supplier ledger reports
 - GST sales, purchase, expense, and income journals with export support
 - Fixed asset purchase/sale tracking, day-prorated SLM/WDV schedules, depreciation journals, and disposal working notes
 - Trial balance and recent voucher dashboard

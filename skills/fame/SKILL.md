@@ -68,6 +68,7 @@ Core tables:
 - `company_master`
 - `product_categories`, `product_subcategories`, `products`
 - `vouchers`, `voucher_lines`, `voucher_items`
+- `voucher_allocations` for bill-wise receipt/payment settlement
 - `fixed_assets`, `fixed_asset_depreciation_entries`
 - `tags`, `coa_tags`, `voucher_tags`
 
@@ -90,8 +91,10 @@ Keep these user workflows functional:
 - Hierarchical chart of accounts and personal-account identity/address/GST fields.
 - Product/service categories, subcategories, opening stock, GST and purchase/sales account bindings.
 - Receipt, payment, invoice, expense, income, and journal entry.
+- Bill-to-bill settlement: allocate receipts across customer sales/income invoices and payments across supplier purchase/expense bills; allow partial and unapplied balances without changing double-entry totals.
+- FIFO auto-adjustment from customer/supplier ledgers: consume unapplied receipts or payments against the oldest outstanding bills for that party without modifying voucher postings.
 - GST intra-state and inter-state posting.
-- Printable/downloadable sales invoice PDFs.
+- Printable/downloadable sales invoice PDFs from voucher entry and report links, including Indian amount-in-words formatting.
 - Fixed-asset purchase, depreciation schedules/journals, and disposal.
 - Account and voucher tagging.
 - Daybook, ledger, profit and loss, trial balance, balance sheet, tag, tax journal, stock, and fixed-asset reports.

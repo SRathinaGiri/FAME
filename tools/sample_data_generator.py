@@ -166,7 +166,7 @@ class Generator:
             "settings", "account_types", "head_accounts", "subhead_accounts",
             "accounts", "company_master", "product_categories", "product_subcategories",
             "products", "fixed_assets", "tags", "coa_tags", "vouchers",
-            "voucher_lines", "voucher_items", "voucher_tags",
+            "voucher_lines", "voucher_items", "voucher_allocations", "voucher_tags",
             "fixed_asset_depreciation_entries"
         ]}
         self.ids_by_code: dict[str, str] = {}
@@ -179,6 +179,8 @@ class Generator:
         self.products: list[dict] = []
         self.fixed_assets: list[dict] = []
         self.stock_quantity: dict[str, float] = {}
+        self.open_receivables: list[dict] = []
+        self.open_payables: list[dict] = []
         try:
             fy_day, fy_month = (int(part) for part in config.financial_year_start.split("-", 1))
             date(2001, fy_month, fy_day)
@@ -637,12 +639,40 @@ class Generator:
             lines.append((party["id"], "Customer", total, 0))
         voucher = self.add_voucher(voucher_type, value, lines, party_id=party["id"], invoice_no=invoice_no)
         self.add_item(voucher["id"], product, taxable, party["state"])
+        target = self.open_receivables if voucher_type in {"sales", "income"} else self.open_payables
+        target.append({
+            "voucher_id": voucher["id"],
+            "party_id": party["id"],
+            "voucher_date": value,
+            "outstanding_minor": total,
+        })
         if product["kind"] == "product":
             if voucher_type in {"purchase", "expense"}:
                 self.stock_quantity[product["id"]] += 1
             elif voucher_type == "sales":
                 self.stock_quantity[product["id"]] -= 1
         return voucher
+
+    def apply_settlement(self, settlement_voucher: dict, party_id: str, amount_minor: int, settlement_type: str) -> None:
+        bills = self.open_receivables if settlement_type == "receipt" else self.open_payables
+        remaining = amount_minor
+        for bill in bills:
+            if remaining <= 0:
+                break
+            if bill["party_id"] != party_id or bill["voucher_date"] > date.fromisoformat(settlement_voucher["voucher_date"]):
+                continue
+            allocated = min(remaining, int(bill["outstanding_minor"]))
+            if allocated <= 0:
+                continue
+            self.data["voucher_allocations"].append({
+                "id": self.uid(),
+                "settlement_voucher_id": settlement_voucher["id"],
+                "invoice_voucher_id": bill["voucher_id"],
+                "amount_minor": allocated,
+                "created_at": self.now,
+            })
+            bill["outstanding_minor"] -= allocated
+            remaining -= allocated
 
     def add_fixed_asset_purchases(self) -> None:
         machine_product = self.products[0]
@@ -658,6 +688,12 @@ class Generator:
             lines.append((supplier["id"], "Supplier", 0, total))
             voucher = self.add_voucher("purchase", value, lines, party_id=supplier["id"], invoice_no=f"FA-{index + 1:03d}")
             self.add_item(voucher["id"], machine_product, cost, supplier["state"])
+            self.open_payables.append({
+                "voucher_id": voucher["id"],
+                "party_id": supplier["id"],
+                "voucher_date": value,
+                "outstanding_minor": total,
+            })
             asset = {
                 "id": self.uid(), "name": name, "asset_account_id": self.account("104101"),
                 "purchase_voucher_id": voucher["id"], "purchase_date": value.isoformat(),
@@ -720,6 +756,12 @@ class Generator:
                 narration=narration,
             )
             self.add_voucher_tag(voucher["id"], "Fixed Assets")
+            self.open_receivables.append({
+                "voucher_id": voucher["id"],
+                "party_id": customer["id"],
+                "voucher_date": sale_date,
+                "outstanding_minor": total,
+            })
             for period in depreciation_position["periods"]:
                 if not period["depreciation"]:
                     continue
@@ -797,11 +839,21 @@ class Generator:
             elif pick < 0.80:
                 customer = self.random.choice(self.customers)
                 amount = self.money(self.random.randint(2000, 150000))
-                self.add_voucher("receipt", value, [(self.account("101201"), "Receipt", amount, 0), (customer["id"], "Customer receipt", 0, amount)])
+                voucher = self.add_voucher(
+                    "receipt", value,
+                    [(self.account("101201"), "Receipt", amount, 0), (customer["id"], "Customer receipt", 0, amount)],
+                    party_id=customer["id"],
+                )
+                self.apply_settlement(voucher, customer["id"], amount, "receipt")
             elif pick < 0.91:
                 supplier = self.random.choice(self.suppliers)
                 amount = self.money(self.random.randint(2000, 150000))
-                self.add_voucher("payment", value, [(supplier["id"], "Supplier payment", amount, 0), (self.account("101201"), "Payment", 0, amount)])
+                voucher = self.add_voucher(
+                    "payment", value,
+                    [(supplier["id"], "Supplier payment", amount, 0), (self.account("101201"), "Payment", 0, amount)],
+                    party_id=supplier["id"],
+                )
+                self.apply_settlement(voucher, supplier["id"], amount, "payment")
             elif pick < 0.955:
                 supplier = self.random.choice(self.suppliers)
                 service = self.random.choice(SERVICE_PRODUCTS)

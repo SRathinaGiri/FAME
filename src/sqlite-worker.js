@@ -21,6 +21,7 @@ const TABLES = [
   'vouchers',
   'voucher_lines',
   'voucher_items',
+  'voucher_allocations',
   'voucher_tags',
   'fixed_asset_depreciation_entries'
 ];
@@ -338,6 +339,15 @@ function ensureSchema() {
       tag_id TEXT NOT NULL REFERENCES tags(id) ON DELETE CASCADE,
       PRIMARY KEY (voucher_id, tag_id)
     );
+    CREATE TABLE IF NOT EXISTS voucher_allocations (
+      id TEXT PRIMARY KEY,
+      settlement_voucher_id TEXT NOT NULL REFERENCES vouchers(id) ON DELETE CASCADE,
+      invoice_voucher_id TEXT NOT NULL REFERENCES vouchers(id) ON DELETE RESTRICT,
+      amount_minor INTEGER NOT NULL CHECK (amount_minor > 0),
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE (settlement_voucher_id, invoice_voucher_id),
+      CHECK (settlement_voucher_id <> invoice_voucher_id)
+    );
     CREATE TABLE IF NOT EXISTS fixed_asset_depreciation_entries (
       id TEXT PRIMARY KEY,
       asset_id TEXT NOT NULL REFERENCES fixed_assets(id) ON DELETE CASCADE,
@@ -357,6 +367,8 @@ function ensureSchema() {
     CREATE INDEX IF NOT EXISTS idx_voucher_lines_voucher ON voucher_lines(voucher_id);
     CREATE INDEX IF NOT EXISTS idx_voucher_lines_account ON voucher_lines(account_id);
     CREATE INDEX IF NOT EXISTS idx_voucher_items_voucher ON voucher_items(voucher_id);
+    CREATE INDEX IF NOT EXISTS idx_voucher_allocations_settlement ON voucher_allocations(settlement_voucher_id);
+    CREATE INDEX IF NOT EXISTS idx_voucher_allocations_invoice ON voucher_allocations(invoice_voucher_id);
     CREATE INDEX IF NOT EXISTS idx_fixed_assets_account ON fixed_assets(asset_account_id);
     CREATE INDEX IF NOT EXISTS idx_fixed_asset_depreciation_asset ON fixed_asset_depreciation_entries(asset_id);
   `);
@@ -1423,6 +1435,115 @@ function getVoucherFixedAssetPayload(voucherId) {
   `, [voucherId, voucherId]);
 }
 
+function getVoucherAllocationsPayload(voucherId) {
+  return all(`
+    SELECT va.id, va.invoice_voucher_id AS invoiceVoucherId,
+           va.amount_minor AS amountMinor, v.voucher_no AS invoiceVoucherNo,
+           v.invoice_no AS externalInvoiceNo, v.voucher_date AS invoiceDate
+    FROM voucher_allocations va
+    JOIN vouchers v ON v.id = va.invoice_voucher_id
+    WHERE va.settlement_voucher_id = ?
+    ORDER BY v.voucher_date, v.voucher_no
+  `, [voucherId]);
+}
+
+function openBills({ settlementType, partyAccountId, settlementVoucherId = '', settlementDate = '' } = {}) {
+  if (!['receipt', 'payment'].includes(settlementType) || !partyAccountId) return [];
+  const invoiceTypes = settlementType === 'receipt' ? ['sales', 'income'] : ['purchase', 'expense'];
+  const partySide = settlementType === 'receipt' ? 'debit_minor' : 'credit_minor';
+  return all(`
+    SELECT *
+    FROM (
+      SELECT v.id AS voucherId, v.voucher_no AS voucherNo, v.type,
+             v.voucher_date AS voucherDate, v.invoice_no AS externalInvoiceNo,
+             COALESCE((
+               SELECT SUM(vl.${partySide})
+               FROM voucher_lines vl
+               WHERE vl.voucher_id = v.id AND vl.account_id = v.party_account_id
+             ), 0) AS invoiceAmountMinor,
+             COALESCE((
+               SELECT SUM(va.amount_minor)
+               FROM voucher_allocations va
+               WHERE va.invoice_voucher_id = v.id
+                 AND (? = '' OR va.settlement_voucher_id <> ?)
+             ), 0) AS previouslyAllocatedMinor,
+             COALESCE((
+               SELECT va.amount_minor
+               FROM voucher_allocations va
+               WHERE va.invoice_voucher_id = v.id
+                 AND va.settlement_voucher_id = ?
+             ), 0) AS currentAllocationMinor
+      FROM vouchers v
+      WHERE v.party_account_id = ?
+        AND v.type IN (?, ?)
+        AND (? = '' OR v.voucher_date <= ?)
+    )
+    WHERE invoiceAmountMinor > previouslyAllocatedMinor
+    ORDER BY voucherDate, voucherNo
+  `, [
+    settlementVoucherId, settlementVoucherId, settlementVoucherId,
+    partyAccountId, invoiceTypes[0], invoiceTypes[1],
+    settlementDate, settlementDate
+  ]).map((row) => ({
+    ...row,
+    invoiceAmountMinor: Number(row.invoiceAmountMinor || 0),
+    previouslyAllocatedMinor: Number(row.previouslyAllocatedMinor || 0),
+    currentAllocationMinor: Number(row.currentAllocationMinor || 0),
+    outstandingMinor: Number(row.invoiceAmountMinor || 0) - Number(row.previouslyAllocatedMinor || 0)
+  }));
+}
+
+function validateSettlementAllocations(voucher, lines) {
+  if (!['receipt', 'payment'].includes(voucher.type)) return [];
+  const party = one('SELECT id FROM accounts WHERE id = ? AND is_personal = 1', [voucher.partyAccountId || '']);
+  if (!party) throw new Error(`Select a ${voucher.type === 'receipt' ? 'customer' : 'supplier'} for bill settlement.`);
+  const partyAmountMinor = lines
+    .filter((line) => line.accountId === voucher.partyAccountId)
+    .reduce((sum, line) => sum + Number(voucher.type === 'receipt' ? line.creditMinor : line.debitMinor || 0), 0);
+  if (partyAmountMinor <= 0) {
+    throw new Error(`The ${voucher.type} must include the selected party on the ${voucher.type === 'receipt' ? 'credit' : 'debit'} side.`);
+  }
+  const seen = new Set();
+  const allocations = (voucher.allocations || [])
+    .map((allocation) => ({
+      invoiceVoucherId: String(allocation.invoiceVoucherId || ''),
+      amountMinor: Number(allocation.amountMinor || 0)
+    }))
+    .filter((allocation) => allocation.invoiceVoucherId && allocation.amountMinor > 0);
+  for (const allocation of allocations) {
+    if (seen.has(allocation.invoiceVoucherId)) throw new Error('A bill can be selected only once.');
+    seen.add(allocation.invoiceVoucherId);
+    const invoice = one(`
+      SELECT v.id, v.type, v.party_account_id AS partyAccountId,
+             COALESCE(SUM(CASE
+               WHEN v.type IN ('sales','income') AND vl.account_id = v.party_account_id THEN vl.debit_minor
+               WHEN v.type IN ('purchase','expense') AND vl.account_id = v.party_account_id THEN vl.credit_minor
+               ELSE 0 END), 0) AS invoiceAmountMinor
+      FROM vouchers v
+      JOIN voucher_lines vl ON vl.voucher_id = v.id
+      WHERE v.id = ?
+      GROUP BY v.id
+    `, [allocation.invoiceVoucherId]);
+    const allowedTypes = voucher.type === 'receipt' ? ['sales', 'income'] : ['purchase', 'expense'];
+    if (!invoice || !allowedTypes.includes(invoice.type) || invoice.partyAccountId !== voucher.partyAccountId) {
+      throw new Error('A selected bill does not belong to this party or settlement type.');
+    }
+    const previouslyAllocated = one(`
+      SELECT COALESCE(SUM(amount_minor), 0) AS amountMinor
+      FROM voucher_allocations
+      WHERE invoice_voucher_id = ?
+        AND (? = '' OR settlement_voucher_id <> ?)
+    `, [allocation.invoiceVoucherId, voucher.id || '', voucher.id || '']);
+    const outstandingMinor = Number(invoice.invoiceAmountMinor || 0) - Number(previouslyAllocated?.amountMinor || 0);
+    if (allocation.amountMinor > outstandingMinor) {
+      throw new Error(`Allocation exceeds the outstanding amount for bill ${allocation.invoiceVoucherId.slice(0, 8)}.`);
+    }
+  }
+  const allocationTotal = allocations.reduce((sum, allocation) => sum + allocation.amountMinor, 0);
+  if (allocationTotal > partyAmountMinor) throw new Error('Bill allocations cannot exceed the receipt or payment amount.');
+  return allocations;
+}
+
 function invoicePostingPayload(voucher) {
   if (!['purchase', 'sales', 'expense', 'income'].includes(voucher.type)) return null;
   if (!voucher.partyAccountId) throw new Error('Select the supplier or customer account.');
@@ -1594,6 +1715,23 @@ async function saveVoucher(voucher) {
   const debit = lines.reduce((sum, line) => sum + Number(line.debitMinor || 0), 0);
   const credit = lines.reduce((sum, line) => sum + Number(line.creditMinor || 0), 0);
   if (debit <= 0 || debit !== credit) throw new Error('Debit and credit totals must match.');
+  const settlementAllocations = validateSettlementAllocations(voucher, lines);
+  if (voucher.id && invoicePayload) {
+    const allocation = one(`
+      SELECT COALESCE(SUM(amount_minor), 0) AS amountMinor
+      FROM voucher_allocations
+      WHERE invoice_voucher_id = ?
+    `, [voucher.id]);
+    const allocatedMinor = Number(allocation?.amountMinor || 0);
+    const invoiceTotalMinor = invoicePayload.items.reduce((sum, item) => sum + Number(item.totalMinor || 0), 0);
+    const existingParty = one('SELECT party_account_id AS partyAccountId FROM vouchers WHERE id = ?', [voucher.id]);
+    if (allocatedMinor && existingParty?.partyAccountId !== voucher.partyAccountId) {
+      throw new Error('The party cannot be changed after bill settlements have been applied.');
+    }
+    if (allocatedMinor > invoiceTotalMinor) {
+      throw new Error('The invoice total cannot be reduced below its settled amount.');
+    }
+  }
   let id = voucher.id;
   transaction(() => {
     if (id) {
@@ -1625,6 +1763,7 @@ async function saveVoucher(voucher) {
       );
       exec('DELETE FROM voucher_lines WHERE voucher_id = ?', [id]);
       exec('DELETE FROM voucher_items WHERE voucher_id = ?', [id]);
+      exec('DELETE FROM voucher_allocations WHERE settlement_voucher_id = ?', [id]);
       exec(`DELETE FROM fixed_asset_depreciation_entries WHERE voucher_id = ? AND posting_type = 'sale'`, [id]);
       exec('DELETE FROM fixed_assets WHERE purchase_voucher_id = ?', [id]);
     } else {
@@ -1703,6 +1842,13 @@ async function saveVoucher(voucher) {
         ]);
       }
     }
+    for (const allocation of settlementAllocations) {
+      exec(`
+        INSERT INTO voucher_allocations (
+          id, settlement_voucher_id, invoice_voucher_id, amount_minor
+        ) VALUES (?, ?, ?, ?)
+      `, [crypto.randomUUID(), id, allocation.invoiceVoucherId, allocation.amountMinor]);
+    }
     replaceVoucherTagLinks(id, voucher.tagIds || []);
   });
   await persistIfMirrored();
@@ -1711,6 +1857,9 @@ async function saveVoucher(voucher) {
 
 async function deleteVoucher({ id }) {
   if (!id) throw new Error('Select a voucher to delete.');
+  if (one('SELECT 1 AS yes FROM voucher_allocations WHERE invoice_voucher_id = ? LIMIT 1', [id])) {
+    throw new Error('This invoice cannot be deleted because receipts or payments have been allocated to it.');
+  }
   if (one(`SELECT 1 AS yes FROM fixed_asset_depreciation_entries WHERE voucher_id = ? AND posting_type = 'journal'`, [id])) {
     throw new Error('Generated depreciation journals cannot be deleted individually.');
   }
@@ -1761,7 +1910,8 @@ function getVoucherList() {
     ...voucher,
     lines: getVoucherLinesPayload(voucher.id),
     items: getVoucherItemsPayload(voucher.id),
-    fixedAsset: getVoucherFixedAssetPayload(voucher.id)
+    fixedAsset: getVoucherFixedAssetPayload(voucher.id),
+    allocations: getVoucherAllocationsPayload(voucher.id)
   }));
 }
 
@@ -1866,10 +2016,102 @@ function reportTaxJournal({ type, fromDate = '', toDate = '' } = {}) {
   return { type, title: labels[type], rows, totals };
 }
 
+function billWisePosition(accountId, throughDate = '') {
+  const account = one(`
+    SELECT a.id, a.is_personal AS isPersonal, h.code AS headCode
+    FROM accounts a
+    JOIN subhead_accounts s ON s.id = a.subhead_id
+    JOIN head_accounts h ON h.id = s.head_id
+    WHERE a.id = ?
+  `, [accountId]);
+  if (!account?.isPersonal || !['102000', '201000'].includes(account.headCode)) {
+    return { eligible: false, unappliedMinor: 0, outstandingMinor: 0, settlementCount: 0, billCount: 0 };
+  }
+  const customer = account.headCode === '102000';
+  const settlementType = customer ? 'receipt' : 'payment';
+  const invoiceTypes = customer ? ['sales', 'income'] : ['purchase', 'expense'];
+  const settlementSide = customer ? 'credit_minor' : 'debit_minor';
+  const invoiceSide = customer ? 'debit_minor' : 'credit_minor';
+  const settlements = all(`
+    SELECT v.id, v.voucher_no AS voucherNo, v.voucher_date AS voucherDate,
+           COALESCE(SUM(CASE WHEN vl.account_id = ? THEN vl.${settlementSide} ELSE 0 END), 0) AS amountMinor,
+           COALESCE((SELECT SUM(va.amount_minor) FROM voucher_allocations va WHERE va.settlement_voucher_id = v.id), 0) AS allocatedMinor
+    FROM vouchers v
+    JOIN voucher_lines vl ON vl.voucher_id = v.id
+    WHERE v.party_account_id = ? AND v.type = ?
+      AND (? = '' OR v.voucher_date <= ?)
+    GROUP BY v.id
+    ORDER BY v.voucher_date, v.voucher_no
+  `, [accountId, accountId, settlementType, throughDate, throughDate]).map((row) => ({
+    ...row,
+    availableMinor: Math.max(0, Number(row.amountMinor || 0) - Number(row.allocatedMinor || 0))
+  })).filter((row) => row.availableMinor > 0);
+  const bills = all(`
+    SELECT v.id, v.voucher_no AS voucherNo, v.voucher_date AS voucherDate,
+           COALESCE(SUM(CASE WHEN vl.account_id = ? THEN vl.${invoiceSide} ELSE 0 END), 0) AS amountMinor,
+           COALESCE((SELECT SUM(va.amount_minor) FROM voucher_allocations va WHERE va.invoice_voucher_id = v.id), 0) AS allocatedMinor
+    FROM vouchers v
+    JOIN voucher_lines vl ON vl.voucher_id = v.id
+    WHERE v.party_account_id = ? AND v.type IN (?, ?)
+      AND (? = '' OR v.voucher_date <= ?)
+    GROUP BY v.id
+    ORDER BY v.voucher_date, v.voucher_no
+  `, [accountId, accountId, invoiceTypes[0], invoiceTypes[1], throughDate, throughDate]).map((row) => ({
+    ...row,
+    outstandingMinor: Math.max(0, Number(row.amountMinor || 0) - Number(row.allocatedMinor || 0))
+  })).filter((row) => row.outstandingMinor > 0);
+  return {
+    eligible: true,
+    customer,
+    settlements,
+    bills,
+    unappliedMinor: settlements.reduce((sum, row) => sum + row.availableMinor, 0),
+    outstandingMinor: bills.reduce((sum, row) => sum + row.outstandingMinor, 0),
+    settlementCount: settlements.length,
+    billCount: bills.length
+  };
+}
+
+async function autoAllocatePartySettlements({ accountId, throughDate = '' } = {}) {
+  const position = billWisePosition(accountId, throughDate);
+  if (!position.eligible) throw new Error('FIFO adjustment is available only for customer and supplier accounts.');
+  let allocationCount = 0;
+  let amountMinor = 0;
+  const touchedSettlements = new Set();
+  transaction(() => {
+    let settlementIndex = 0;
+    let billIndex = 0;
+    while (settlementIndex < position.settlements.length && billIndex < position.bills.length) {
+      const settlement = position.settlements[settlementIndex];
+      const bill = position.bills[billIndex];
+      const allocationMinor = Math.min(settlement.availableMinor, bill.outstandingMinor);
+      if (allocationMinor > 0) {
+        exec(`
+          INSERT INTO voucher_allocations (
+            id, settlement_voucher_id, invoice_voucher_id, amount_minor
+          ) VALUES (?, ?, ?, ?)
+          ON CONFLICT(settlement_voucher_id, invoice_voucher_id)
+          DO UPDATE SET amount_minor = amount_minor + excluded.amount_minor
+        `, [crypto.randomUUID(), settlement.id, bill.id, allocationMinor]);
+        settlement.availableMinor -= allocationMinor;
+        bill.outstandingMinor -= allocationMinor;
+        allocationCount += 1;
+        amountMinor += allocationMinor;
+        touchedSettlements.add(settlement.id);
+      }
+      if (settlement.availableMinor <= 0) settlementIndex += 1;
+      if (bill.outstandingMinor <= 0) billIndex += 1;
+    }
+  });
+  await persistIfMirrored();
+  return { allocationCount, settlementCount: touchedSettlements.size, amountMinor };
+}
+
 function reportLedger({ accountId, fromDate = '', toDate = '' } = {}) {
   if (!accountId) throw new Error('Select an account for the ledger.');
   const account = one(`
-    SELECT a.id, a.code, a.name, h.type_id AS typeId, t.normal_side AS normalSide,
+    SELECT a.id, a.code, a.name, a.is_personal AS isPersonal,
+           h.code AS headCode, h.type_id AS typeId, t.normal_side AS normalSide,
            a.opening_balance_minor AS storedOpeningBalanceMinor
     FROM accounts a
     JOIN subhead_accounts s ON s.id = a.subhead_id
@@ -1914,6 +2156,7 @@ function reportLedger({ accountId, fromDate = '', toDate = '' } = {}) {
   });
   return {
     account,
+    billWise: billWisePosition(accountId, toDate),
     openingBalanceMinor: masterOpeningMinor + Number(opening.balanceMinor || 0) - accumulatedProfitMinor,
     closingBalanceMinor: runningBalanceMinor,
     rows: runningRows
@@ -2559,6 +2802,11 @@ function replaceData(backup) {
       for (const row of backup.data.vouchers || []) exec('INSERT INTO vouchers (id, voucher_no, type, voucher_date, reference_no, invoice_no, invoice_date, narration, party_account_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', [row.id, row.voucher_no, row.type, row.voucher_date, row.reference_no, row.invoice_no, row.invoice_date, row.narration, row.party_account_id, row.created_at, row.updated_at]);
       for (const row of backup.data.voucher_lines || []) exec('INSERT INTO voucher_lines (id, voucher_id, account_id, description, debit_minor, credit_minor, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?)', [row.id, row.voucher_id, row.account_id, row.description, row.debit_minor, row.credit_minor, row.sort_order]);
       for (const row of backup.data.voucher_items || []) exec('INSERT INTO voucher_items (id, voucher_id, product_id, quantity, gst_rate, taxable_minor, cgst_minor, sgst_minor, igst_minor, total_minor, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', [row.id, row.voucher_id, row.product_id, row.quantity, row.gst_rate, row.taxable_minor, row.cgst_minor, row.sgst_minor, row.igst_minor, row.total_minor, row.sort_order]);
+      for (const row of backup.data.voucher_allocations || []) exec(`
+        INSERT INTO voucher_allocations (
+          id, settlement_voucher_id, invoice_voucher_id, amount_minor, created_at
+        ) VALUES (?, ?, ?, ?, ?)
+      `, [row.id, row.settlement_voucher_id, row.invoice_voucher_id, row.amount_minor, row.created_at]);
       for (const row of backup.data.voucher_tags || []) exec('INSERT INTO voucher_tags (voucher_id, tag_id) VALUES (?, ?)', [row.voucher_id, row.tag_id]);
       for (const row of backup.data.fixed_asset_depreciation_entries || []) exec(`
         INSERT INTO fixed_asset_depreciation_entries (
@@ -2604,6 +2852,7 @@ const handlers = {
   createTag,
   setCoaTags,
   setVoucherTags,
+  openBills,
   saveVoucher,
   deleteVoucher,
   resetCompanyData,
@@ -2617,6 +2866,7 @@ const handlers = {
   reportDaybook,
   reportTaxJournal,
   reportLedger,
+  autoAllocatePartySettlements,
   reportProfitLoss,
   reportTrialBalance,
   reportFixedAssetRegister,
