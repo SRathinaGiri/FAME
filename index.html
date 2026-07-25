@@ -623,19 +623,19 @@
           <div class="split-grid">
             <section class="panel">
               <div class="panel-heading">
-                <h2>Encrypted Export</h2>
+                <h2>Backup Export</h2>
               </div>
               <form id="exportForm" class="form-grid">
                 <label>
-                  Backup Password
-                  <input id="exportPassword" type="password" minlength="8" required autocomplete="new-password">
+                  Backup Password (optional)
+                  <input id="exportPassword" type="password" minlength="8" autocomplete="new-password" placeholder="Leave blank for plain JSON">
                 </label>
                 <button type="submit">Export Backup</button>
               </form>
             </section>
             <section class="panel">
               <div class="panel-heading">
-                <h2>Encrypted Import</h2>
+                <h2>Backup Import</h2>
               </div>
               <form id="importForm" class="form-grid">
                 <label>
@@ -643,8 +643,8 @@
                   <input id="importFile" type="file" accept="application/json,.json" required>
                 </label>
                 <label>
-                  Backup Password
-                  <input id="importPassword" type="password" minlength="8" required autocomplete="current-password">
+                  Backup Password (optional)
+                  <input id="importPassword" type="password" minlength="8" autocomplete="current-password" placeholder="Only needed for encrypted backups">
                 </label>
                 <button type="submit">Import Backup</button>
               </form>
@@ -660,7 +660,7 @@
             <div class="action-row">
               <button id="exportBiZip" type="button">Export All Tables (ZIP of CSVs)</button>
             </div>
-            <p class="field-note">This analytical ZIP is not encrypted, so store it securely. Continue using the encrypted JSON backup for restoring F.A.M.E data.</p>
+            <p class="field-note">This analytical ZIP is not encrypted, so store it securely. JSON backups may optionally be password encrypted.</p>
           </section>
         </section>
       </main>

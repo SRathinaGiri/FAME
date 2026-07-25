@@ -889,7 +889,7 @@ class App(Tk):
         ttk.Label(frame, text="Output JSON").grid(row=7, column=0, sticky="w", pady=4)
         ttk.Entry(frame, textvariable=self.output, width=48).grid(row=7, column=1, sticky="ew", pady=4)
         ttk.Button(frame, text="Browse", command=self.browse).grid(row=7, column=2, padx=6)
-        ttk.Label(frame, text="Encrypt Password (min 8)").grid(row=8, column=0, sticky="w", pady=4)
+        ttk.Label(frame, text="Encrypt Password (optional, min 8)").grid(row=8, column=0, sticky="w", pady=4)
         ttk.Entry(frame, textvariable=self.password, width=18, show="*").grid(row=8, column=1, sticky="ew", pady=4)
         ttk.Checkbutton(frame, text="GST enabled", variable=self.gst_enabled).grid(row=9, column=1, sticky="w", pady=4)
         ttk.Button(frame, text="Generate", command=self.run_generate).grid(row=10, column=1, sticky="e", pady=(12, 0))

@@ -4,7 +4,7 @@ import { decryptBackup, encryptBackup } from './crypto.js';
 const moneyFormatter = new Intl.NumberFormat('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const quantityFormatter = new Intl.NumberFormat('en-IN', { maximumFractionDigits: 3 });
 const appLocale = 'en-IN';
-const APP_VERSION = 'v27';
+const APP_VERSION = 'v28';
 const indiaStates = [
   ['AP', 'Andhra Pradesh'],
   ['AR', 'Arunachal Pradesh'],
@@ -2703,7 +2703,12 @@ function bindEvents() {
 
   els.exportForm.addEventListener('submit', async (event) => {
     event.preventDefault();
-    downloadJson(`fame-backup-${todayIso()}.json`, await encryptBackup(await dbCall('exportData'), els.exportPassword.value));
+    const backup = await dbCall('exportData');
+    const password = els.exportPassword.value;
+    downloadJson(
+      `fame-backup-${todayIso()}.json`,
+      password ? await encryptBackup(backup, password) : backup
+    );
     els.exportForm.reset();
   });
   els.exportBiZip.addEventListener('click', () => {

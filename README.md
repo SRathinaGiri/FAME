@@ -44,7 +44,7 @@ F.A.M.E is a local-first accounting PWA built as a self-contained browser app. T
 - GST sales, purchase, expense, and income journals with export support
 - Fixed asset purchase/sale tracking, day-prorated SLM/WDV schedules, depreciation journals, and disposal working notes
 - Trial balance and recent voucher dashboard
-- Password-encrypted JSON backup export/import
+- Optional password-encrypted JSON backup export/import
 - Full database ZIP-of-CSVs export with Power BI relationship metadata and Power Query guidance
 - New company reset flow with backup prompt
 
@@ -72,7 +72,7 @@ CLI mode is also available:
 python tools/sample_data_generator.py --no-gui --transactions 1000 --accounts 100 --products 40 --assets 12 --financial-year-start 01-04 --password "change-me"
 ```
 
-Supplying `--password` writes a F.A.M.E encrypted backup JSON compatible with the Backup import flow. F.A.M.E requires an 8-character minimum password for backup import, and the generator enforces the same rule.
+Backups may be created and imported without a password. Supplying `--password` writes a F.A.M.E encrypted backup JSON compatible with the Backup import flow. When a password is supplied, it must contain at least eight characters.
 The financial-year start uses `dd-mm` format and defaults to `01-04`.
 
 SQLite OPFS requires cross-origin isolation headers. The Vite config sends:
@@ -102,4 +102,4 @@ GitHub Pages does not provide configurable COOP/COEP response headers. F.A.M.E t
 - OPFS-backed SQLite when the host/browser supports the required isolation headers
 - IndexedDB-mirrored SQLite fallback on GitHub Pages, so installed mobile use can still keep local data
 
-Encrypted export/import remains the recommended backup path before changing phones, clearing browser storage, or reinstalling.
+Export/import remains the recommended backup path before changing phones, clearing browser storage, or reinstalling. Use optional password encryption when the backup contains sensitive or real accounting data.

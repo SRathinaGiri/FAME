@@ -17,7 +17,7 @@ Understand these product boundaries before editing:
 - Use SQLite WASM in a module worker.
 - Prefer OPFS persistence when cross-origin isolation is available.
 - Use the IndexedDB-mirrored SQLite fallback on hosts such as GitHub Pages.
-- Treat encrypted JSON backup/export as the portable data-transfer mechanism between devices.
+- Treat JSON backup/export, with optional password encryption, as the portable data-transfer mechanism between devices.
 - Support Indian accounting conventions, Indian financial years, `en-IN` formatting, GSTIN/PAN fields, HSN/SAC, CGST/SGST/IGST, and rupee values stored as integer paise.
 
 ## Repository map
@@ -95,7 +95,7 @@ Keep these user workflows functional:
 - Account and voucher tagging.
 - Daybook, ledger, profit and loss, trial balance, balance sheet, tag, tax journal, stock, and fixed-asset reports.
 - Excel/PDF report export and Power BI ZIP export.
-- Password-encrypted backup/import and new-company reset.
+- Plain or optionally password-encrypted backup/import and new-company reset.
 - Installation, offline use, service-worker update, OPFS, and IndexedDB fallback.
 
 ## Sample-data requirements
@@ -111,7 +111,7 @@ Generate a dataset that is useful for testing all major workflows:
 - Keep chronological product stock non-negative.
 - Reconcile product opening inventory value to the Inventory Stock account opening balance.
 - Generate deterministic output for a fixed seed except UUIDs, timestamps, and encryption randomness.
-- Preserve unencrypted and AES-GCM encrypted backup compatibility.
+- Preserve unencrypted and AES-GCM encrypted backup compatibility. Require a password only when opening an encrypted backup; keep plain backup export and import password-free.
 
 Validate generated data using counts, uniqueness, foreign-key coverage, voucher balance, GST arithmetic, stock chronology, fixed-asset links, and voucher-type coverage. Do not accept successful JSON generation alone as proof of correctness.
 
