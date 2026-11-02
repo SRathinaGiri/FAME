@@ -430,7 +430,7 @@
                 <div class="panel-heading">
                   <div>
                     <h3 id="settlementTitle">Bill Settlement</h3>
-                    <p class="field-note">Tick each bill this amount settles, or type a part amount against it. Use <b>On account / advance</b> only for money not against any bill. The party line above is filled from this table and cannot be edited directly.</p>
+                    <p class="field-note" id="settlementNote">Tick each invoice this amount settles, or type a part amount against it. The party line above equals this total and cannot be edited directly. To record an amount not against any invoice, leave the party blank and use the party's account on a line.</p>
                   </div>
                   <span id="settlementSummary" class="pill">Applied 0.00</span>
                 </div>
@@ -449,10 +449,6 @@
                     </thead>
                     <tbody id="settlementBills"></tbody>
                     <tfoot id="settlementFooter" class="hidden">
-                      <tr>
-                        <td colspan="6">On account / advance (not against any bill)</td>
-                        <td><input id="settlementOnAccount" class="amount-input" inputmode="decimal" placeholder="0.00"></td>
-                      </tr>
                       <tr class="report-total-row">
                         <td colspan="6">Total for this voucher</td>
                         <td id="settlementTotal" class="amount">0.00</td>

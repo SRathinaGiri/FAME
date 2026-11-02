@@ -98,6 +98,13 @@ const seedAccounts = [
 ];
 
 const OPENING_ADJUSTMENT_CODE = '302102';
+// The seeded chart is load-bearing: postings, filters and reports find these by code
+// (e.g. 101000 cash/bank, 102000 / 201000 parties, 202101-202103 GST, 104901, 502301).
+// Their code, type and parent cannot change and they cannot be deleted; names can.
+const BUILT_IN_HEAD_CODES = new Set(seedHeads.map(([code]) => code));
+const BUILT_IN_SUBHEAD_CODES = new Set(seedSubheads.map(([code]) => code));
+const BUILT_IN_ACCOUNT_CODES = new Set(seedAccounts.map(([code]) => code));
+const PARTY_HEAD_CODES = { receipt: '102000', payment: '201000' };
 const SYSTEM_ACCOUNT_CODES = new Set(['302101', OPENING_ADJUSTMENT_CODE]);
 
 function exec(sql, bind) {
@@ -1069,11 +1076,11 @@ function listCoaRows() {
   for (const type of listAccountTypes()) {
     rows.push({ id: type.id, level: 'type', code: String(type.baseCode), name: type.name, typeId: type.id, typeName: type.name, normalSide: type.normalSide });
     for (const head of listHeads().filter((item) => item.typeId === type.id)) {
-      rows.push({ ...head, level: 'head', parentId: type.id, isHeader: true });
+      rows.push({ ...head, level: 'head', parentId: type.id, isHeader: true, isBuiltIn: BUILT_IN_HEAD_CODES.has(head.code) });
       for (const subhead of listSubheads().filter((item) => item.headId === head.id)) {
-        rows.push({ ...subhead, level: 'subhead', parentId: head.id, isHeader: true });
+        rows.push({ ...subhead, level: 'subhead', parentId: head.id, isHeader: true, isBuiltIn: BUILT_IN_SUBHEAD_CODES.has(subhead.code) });
         for (const account of listPostingAccounts().filter((item) => item.subheadId === subhead.id)) {
-          rows.push({ ...account, level: 'account', parentId: subhead.id, isHeader: false });
+          rows.push({ ...account, level: 'account', parentId: subhead.id, isHeader: false, isBuiltIn: BUILT_IN_ACCOUNT_CODES.has(account.code) });
         }
       }
     }
@@ -1171,7 +1178,10 @@ async function saveCoaItem(item) {
     if (level === 'head') {
       if (!item.typeId) throw new Error('Account type is required.');
       if (item.id) {
-        const current = one('SELECT type_id AS typeId FROM head_accounts WHERE id = ?', [item.id]);
+        const current = one('SELECT code, type_id AS typeId FROM head_accounts WHERE id = ?', [item.id]);
+        if (BUILT_IN_HEAD_CODES.has(current?.code) && (code !== current.code || item.typeId !== current.typeId)) {
+          throw new Error(`Head ${current.code} is built in: its code and type cannot be changed (the name can).`);
+        }
         const hasTx = one(`
           SELECT 1 AS yes
           FROM voucher_lines vl
@@ -1188,7 +1198,10 @@ async function saveCoaItem(item) {
     } else if (level === 'subhead') {
       if (!item.headId) throw new Error('Head account is required.');
       if (item.id) {
-        const current = one('SELECT head_id AS headId FROM subhead_accounts WHERE id = ?', [item.id]);
+        const current = one('SELECT code, head_id AS headId FROM subhead_accounts WHERE id = ?', [item.id]);
+        if (BUILT_IN_SUBHEAD_CODES.has(current?.code) && (code !== current.code || item.headId !== current.headId)) {
+          throw new Error(`Sub-head ${current.code} is built in: its code and head cannot be changed (the name can).`);
+        }
         const hasTx = one(`
           SELECT 1 AS yes
           FROM voucher_lines vl
@@ -1203,9 +1216,13 @@ async function saveCoaItem(item) {
       replaceCoaTagLinks('subhead', item.id, item.tagIds || []);
     } else if (level === 'account') {
       if (!item.subheadId) throw new Error('Sub-head account is required.');
-      const currentAccount = item.id ? one('SELECT code FROM accounts WHERE id = ?', [item.id]) : null;
+      const currentAccount = item.id ? one('SELECT code, subhead_id AS subheadId FROM accounts WHERE id = ?', [item.id]) : null;
       if (SYSTEM_ACCOUNT_CODES.has(currentAccount?.code) && (code !== currentAccount.code || !name)) {
         throw new Error('System accounts are maintained by F.A.M.E.');
+      }
+      if (BUILT_IN_ACCOUNT_CODES.has(currentAccount?.code)
+        && (code !== currentAccount.code || item.subheadId !== currentAccount.subheadId)) {
+        throw new Error(`Account ${currentAccount.code} is built in: its code and sub-head cannot be changed (the name can).`);
       }
       const selectedSubhead = one(`
         SELECT h.type_id AS typeId
@@ -1261,6 +1278,10 @@ async function saveCoaItem(item) {
 async function deleteCoaItem({ level, id }) {
   if (!id) throw new Error('Select an item to delete.');
   transaction(() => {
+    const table = { head: 'head_accounts', subhead: 'subhead_accounts', account: 'accounts' }[level];
+    const builtIn = { head: BUILT_IN_HEAD_CODES, subhead: BUILT_IN_SUBHEAD_CODES, account: BUILT_IN_ACCOUNT_CODES }[level];
+    const target = table ? one(`SELECT code FROM ${table} WHERE id = ?`, [id]) : null;
+    if (builtIn?.has(target?.code)) throw new Error(`${target.code} is part of the built-in chart of accounts and cannot be deleted.`);
     if (level === 'head') {
       const used = one('SELECT 1 AS yes FROM subhead_accounts WHERE head_id = ? LIMIT 1', [id]);
       if (used) throw new Error('Cannot delete a head account with sub-head accounts.');
@@ -1453,8 +1474,22 @@ function openBills({ settlementType, partyAccountId, settlementVoucherId = '', s
 
 function validateSettlementAllocations(voucher, lines) {
   if (!['receipt', 'payment'].includes(voucher.type)) return [];
-  const party = one('SELECT id FROM accounts WHERE id = ? AND is_personal = 1', [voucher.partyAccountId || '']);
-  if (!party) throw new Error(`Select a ${voucher.type === 'receipt' ? 'customer' : 'supplier'} for bill settlement.`);
+  const word = voucher.type === 'receipt' ? 'customer' : 'supplier';
+  if (!voucher.partyAccountId) {
+    // No party selected: an unadjusted receipt / payment. Bills cannot be picked here; any
+    // allocations made later by FIFO are kept (null = keep) and re-checked after the save.
+    if ((voucher.allocations || []).some((allocation) => Number(allocation.amountMinor || 0) > 0)) {
+      throw new Error(`Select the ${word} to adjust bills.`);
+    }
+    return null;
+  }
+  const party = one(`
+    SELECT a.id FROM accounts a
+    JOIN subhead_accounts s ON s.id = a.subhead_id
+    JOIN head_accounts h ON h.id = s.head_id
+    WHERE a.id = ? AND a.is_personal = 1 AND h.code = ?
+  `, [voucher.partyAccountId, PARTY_HEAD_CODES[voucher.type]]);
+  if (!party) throw new Error(`The selected ${word} must be a personal account under ${PARTY_HEAD_CODES[voucher.type]}.`);
   const partyAmountMinor = lines
     .filter((line) => line.accountId === voucher.partyAccountId)
     .reduce((sum, line) => sum + Number(voucher.type === 'receipt' ? line.creditMinor : line.debitMinor || 0), 0);
@@ -1498,7 +1533,10 @@ function validateSettlementAllocations(voucher, lines) {
     }
   }
   const allocationTotal = allocations.reduce((sum, allocation) => sum + allocation.amountMinor, 0);
-  if (allocationTotal > partyAmountMinor) throw new Error('Bill allocations cannot exceed the receipt or payment amount.');
+  if (allocationTotal !== partyAmountMinor) {
+    throw new Error(`The ${word}'s amount (${(partyAmountMinor / 100).toFixed(2)}) must equal the bills adjusted (${(allocationTotal / 100).toFixed(2)}). `
+      + `Adjust the bills, or clear the ${word} to record it as unadjusted.`);
+  }
   return allocations;
 }
 
@@ -1703,7 +1741,7 @@ async function saveVoucher(voucher) {
       )) {
         throw new Error('A fixed asset purchase cannot be edited after depreciation or disposal has been posted.');
       }
-      const existing = one('SELECT type, voucher_date AS voucherDate, voucher_no AS voucherNo FROM vouchers WHERE id = ?', [id]);
+      const existing = one('SELECT type, voucher_date AS voucherDate, voucher_no AS voucherNo, party_account_id AS partyAccountId FROM vouchers WHERE id = ?', [id]);
       if (!existing) throw new Error('The selected voucher was not found.');
       const existingPrefix = voucherSeriesPrefix(existing.type, existing.voucherDate);
       const requestedPrefix = voucherSeriesPrefix(voucher.type, voucher.voucherDate);
@@ -1721,7 +1759,11 @@ async function saveVoucher(voucher) {
       );
       exec('DELETE FROM voucher_lines WHERE voucher_id = ?', [id]);
       exec('DELETE FROM voucher_items WHERE voucher_id = ?', [id]);
-      exec('DELETE FROM voucher_allocations WHERE settlement_voucher_id = ?', [id]);
+      // Keep allocations only on a voucher that never had a party (made by FIFO); a party that is
+      // now cleared takes its hand-picked bill adjustments with it.
+      if (settlementAllocations !== null || existing.partyAccountId) {
+        exec('DELETE FROM voucher_allocations WHERE settlement_voucher_id = ?', [id]);
+      }
       exec(`DELETE FROM fixed_asset_depreciation_entries WHERE voucher_id = ? AND posting_type = 'sale'`, [id]);
       exec('DELETE FROM fixed_assets WHERE purchase_voucher_id = ?', [id]);
     } else {
@@ -1800,12 +1842,31 @@ async function saveVoucher(voucher) {
         ]);
       }
     }
-    for (const allocation of settlementAllocations) {
+    for (const allocation of settlementAllocations || []) {
       exec(`
         INSERT INTO voucher_allocations (
           id, settlement_voucher_id, invoice_voucher_id, amount_minor
         ) VALUES (?, ?, ?, ?)
       `, [crypto.randomUUID(), id, allocation.invoiceVoucherId, allocation.amountMinor]);
+    }
+    if (settlementAllocations === null) {
+      // Unadjusted voucher that FIFO has already matched to bills: the edit must still cover them.
+      const side = voucher.type === 'receipt' ? 'credit_minor' : 'debit_minor';
+      const short = one(`
+        SELECT inv.party_account_id AS partyId, SUM(va.amount_minor) AS allocatedMinor,
+               COALESCE((SELECT SUM(vl.${side}) FROM voucher_lines vl
+                         WHERE vl.voucher_id = va.settlement_voucher_id AND vl.account_id = inv.party_account_id), 0) AS lineMinor
+        FROM voucher_allocations va
+        JOIN vouchers inv ON inv.id = va.invoice_voucher_id
+        WHERE va.settlement_voucher_id = ?
+        GROUP BY inv.party_account_id
+        HAVING allocatedMinor > lineMinor
+        LIMIT 1
+      `, [id]);
+      if (short) {
+        throw new Error(`${(Number(short.allocatedMinor) / 100).toFixed(2)} of this voucher is already adjusted to bills (FIFO); `
+          + 'keep at least that amount on the party account.');
+      }
     }
     replaceVoucherTagLinks(id, voucher.tagIds || []);
   });
@@ -1996,11 +2057,12 @@ function billWisePosition(accountId, throughDate = '') {
            COALESCE((SELECT SUM(va.amount_minor) FROM voucher_allocations va WHERE va.settlement_voucher_id = v.id), 0) AS allocatedMinor
     FROM vouchers v
     JOIN voucher_lines vl ON vl.voucher_id = v.id
-    WHERE v.party_account_id = ? AND v.type = ?
+    WHERE v.type = ?
+      AND (v.party_account_id = ? OR v.id IN (SELECT voucher_id FROM voucher_lines WHERE account_id = ?))
       AND (? = '' OR v.voucher_date <= ?)
     GROUP BY v.id
     ORDER BY v.voucher_date, v.voucher_no
-  `, [accountId, accountId, settlementType, throughDate, throughDate]).map((row) => ({
+  `, [accountId, settlementType, accountId, accountId, throughDate, throughDate]).map((row) => ({
     ...row,
     availableMinor: Math.max(0, Number(row.amountMinor || 0) - Number(row.allocatedMinor || 0))
   })).filter((row) => row.availableMinor > 0);

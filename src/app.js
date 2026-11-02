@@ -203,7 +203,6 @@ const els = {
   newPartyAccount: document.querySelector('#newPartyAccount'),
   newLineAccount: document.querySelector('#newLineAccount'),
   settlementFooter: document.querySelector('#settlementFooter'),
-  settlementOnAccount: document.querySelector('#settlementOnAccount'),
   settlementTotal: document.querySelector('#settlementTotal'),
   coaReturnBanner: document.querySelector('#coaReturnBanner'),
   coaReturnText: document.querySelector('#coaReturnText'),
@@ -667,7 +666,7 @@ const coaForms = {
 function updateCoaButtons() {
   for (const level of ['head', 'subhead', 'account']) {
     const controls = coaForms[level]();
-    controls.deleteButton.disabled = !controls.id.value || controls.form.dataset.system === 'true';
+    controls.deleteButton.disabled = !controls.id.value || controls.form.dataset.system === 'true' || controls.form.dataset.builtIn === 'true';
   }
 }
 
@@ -675,6 +674,9 @@ function clearCoaForm(level) {
   const controls = coaForms[level]();
   controls.form.reset();
   controls.form.dataset.system = 'false';
+  controls.form.dataset.builtIn = 'false';
+  if (controls.type) controls.type.disabled = false;
+  if (controls.head) controls.head.disabled = false;
   controls.id.value = '';
   controls.name.disabled = false;
   controls.code.disabled = false;
@@ -741,8 +743,13 @@ function fillCoaForm(row) {
   }
   renderTagOptions(controls.tags, currentCoaTagIds(row.level, row.id));
   const lockAccountStructure = row.level === 'account' && (row.hasTransactions || row.isSystem);
-  controls.code.disabled = lockAccountStructure;
-  if (controls.subhead) controls.subhead.disabled = lockAccountStructure;
+  // Built-in heads / sub-heads / accounts: code, type and parent are fixed; the name can change.
+  const builtIn = Boolean(row.isBuiltIn);
+  controls.code.disabled = lockAccountStructure || builtIn;
+  if (controls.subhead) controls.subhead.disabled = lockAccountStructure || builtIn;
+  if (controls.head) controls.head.disabled = builtIn;
+  if (controls.type) controls.type.disabled = builtIn;
+  controls.form.dataset.builtIn = String(builtIn);
   updateCoaButtons();
   controls.form.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 }
@@ -2124,21 +2131,24 @@ function settlementBillsMinor() {
   return getSettlementAllocations().reduce((sum, allocation) => sum + allocation.amountMinor, 0);
 }
 
-function settlementOnAccountMinor() {
-  return Math.max(0, moneyToMinor(els.settlementOnAccount.value));
-}
-
 function settlementTotalMinor() {
-  return settlementBillsMinor() + settlementOnAccountMinor();
+  return settlementBillsMinor();
 }
 
 function updateSettlementSummary() {
   if (!isSettlementType()) return;
   const bills = settlementBillsMinor();
-  const onAccount = settlementOnAccountMinor();
-  els.settlementTotal.textContent = minorToMoney(bills + onAccount);
-  els.settlementSummary.textContent = `Bills ${minorToMoney(bills)} | On account ${minorToMoney(onAccount)}`;
-  els.settlementSummary.classList.remove('danger');
+  els.settlementTotal.textContent = minorToMoney(bills);
+  if (!els.voucherParty.value) {
+    els.settlementSummary.textContent = 'Unadjusted';
+    els.settlementSummary.classList.remove('danger');
+    return;
+  }
+  const gap = state.settlementLegacyGapMinor || 0;
+  els.settlementSummary.textContent = gap
+    ? `Adjusted ${minorToMoney(bills)} | ${minorToMoney(gap)} of the saved amount is not adjusted`
+    : `Adjusted ${minorToMoney(bills)}`;
+  els.settlementSummary.classList.toggle('danger', Boolean(gap));
 }
 
 // The line that carries the customer (receipt, credit side) or supplier (payment, debit side).
@@ -2153,36 +2163,43 @@ function settlementPartyRow() {
 }
 
 /**
- * Receipts and payments: the party line is locked to the selected customer / supplier and its
- * amount is the total of the bills ticked below plus any on-account amount. With a single
- * counter line (cash / bank) that line follows the same amount; with extra lines (for example
- * TDS deducted, bank charges) the user splits the other side and the balance check applies.
+ * Receipts and payments with a party selected: the party line is locked to that customer /
+ * supplier and its amount is exactly the total of the invoices ticked below. With a single
+ * counter line (cash / bank) that line follows; extra lines (TDS deducted, bank charges) stay
+ * editable and the balance check applies.
+ * With no party selected the voucher is an ordinary, unadjusted receipt / payment: all lines
+ * are free, so the customer's account can be credited directly (FIFO can adjust it later).
  */
 function applySettlementLock() {
   const rows = [...els.voucherLines.querySelectorAll('tr')];
+  const party = els.voucherParty.value;
+  const lockWanted = isSettlementType() && Boolean(party);
   rows.forEach((row) => {
-    if (row.dataset.partyLine === '1' && !isSettlementType()) unlockPartyRow(row);
+    if (row.classList.contains('party-line') && !lockWanted) unlockPartyRow(row);
   });
-  if (!isSettlementType()) return;
+  if (!lockWanted) {
+    updateVoucherBalance();
+    return;
+  }
   const partyRow = settlementPartyRow();
   if (!partyRow) return;
   partyRow.dataset.partyLine = '1';
-  const party = els.voucherParty.value;
   const side = settlementPartySide();
   const select = partyRow.querySelector('.line-account');
   const amountInput = partyRow.querySelector(`.line-${side}`);
-  select.value = party || '';
+  select.value = party;
   select.disabled = true;
-  select.title = party ? 'Fixed to the selected party' : 'Select the party above';
+  select.title = 'Fixed to the selected party';
   amountInput.readOnly = true;
   amountInput.classList.add('locked-amount');
-  amountInput.title = 'Total of the bills ticked below plus any on-account amount';
+  amountInput.title = 'Equals the invoices ticked below';
   partyRow.classList.add('party-line');
   partyRow.querySelector('.remove-line')?.classList.add('hidden');
-  const total = party ? settlementTotalMinor() : 0;
+  const total = settlementTotalMinor();
   amountInput.value = total ? minorToMoney(total) : '';
   const counterRows = rows.filter((row) => row !== partyRow);
-  if (counterRows.length === 1) {
+  // A voucher saved earlier with an unadjusted part: never silently change its cash/bank amount.
+  if (counterRows.length === 1 && !state.settlementLegacyGapMinor) {
     const counterSide = side === 'credit' ? 'debit' : 'credit';
     const counterInput = counterRows[0].querySelector(`.line-${counterSide}`);
     if (counterInput && !counterInput.disabled) counterInput.value = total ? minorToMoney(total) : '';
@@ -2191,7 +2208,6 @@ function applySettlementLock() {
 }
 
 function unlockPartyRow(row) {
-  delete row.dataset.partyLine;
   row.classList.remove('party-line');
   row.querySelector('.line-account').disabled = false;
   row.querySelectorAll('.line-debit, .line-credit').forEach((input) => {
@@ -2204,9 +2220,10 @@ function unlockPartyRow(row) {
 async function loadOpenBills() {
   const requestId = ++state.settlementRequestId;
   if (!isSettlementType() || !els.voucherParty.value) {
-    els.settlementBills.innerHTML = '<tr><td colspan="7" class="empty">Select a customer or supplier to view unpaid bills.</td></tr>';
+    const word = els.voucherType.value === 'receipt' ? 'customer' : 'supplier';
+    els.settlementBills.innerHTML = `<tr><td colspan="7" class="empty">No ${word} selected: this is recorded as an unadjusted ${els.voucherType.value}. Credit / debit the ${word}'s account on a line; it can be adjusted to invoices later (Ledger › FIFO). Select a ${word} above to adjust it against invoices now.</td></tr>`;
     els.settlementFooter.classList.add('hidden');
-    els.settlementOnAccount.value = '';
+    state.settlementLegacyGapMinor = 0;
     updateSettlementSummary();
     applySettlementLock();
     return;
@@ -2235,7 +2252,7 @@ async function loadOpenBills() {
             placeholder="0.00" data-maximum-minor="${bill.outstandingMinor}"></td>
         </tr>
       `).join('')
-    : '<tr><td colspan="7" class="empty">No unpaid bills for this party as of the voucher date. Use On account / advance below.</td></tr>';
+    : '<tr><td colspan="7" class="empty">No unpaid invoices for this party as of the voucher date. To record an advance, clear the party above and use the party\'s account on a line.</td></tr>';
   els.settlementBills.querySelectorAll('tr[data-invoice-voucher-id]').forEach((row) => {
     const input = row.querySelector('.settlement-amount');
     const check = row.querySelector('.settlement-check');
@@ -2244,20 +2261,24 @@ async function loadOpenBills() {
       const amount = moneyToMinor(input.value);
       input.setCustomValidity(amount > maximum ? 'Amount exceeds this bill’s outstanding balance.' : '');
       check.checked = amount > 0 && amount === maximum;
+      state.settlementLegacyGapMinor = 0;
       applySettlementLock();
     });
     check.addEventListener('change', () => {
       input.value = check.checked ? minorToMoney(maximum) : '';
       input.setCustomValidity('');
+      state.settlementLegacyGapMinor = 0;
       applySettlementLock();
     });
   });
   els.settlementFooter.classList.remove('hidden');
   if (state.pendingSettlementAmountMinor != null) {
-    // Editing a saved voucher: whatever was not against a bill stays on account.
-    els.settlementOnAccount.value = minorToMoney(Math.max(0, state.pendingSettlementAmountMinor - settlementBillsMinor())) || '';
-    if (moneyToMinor(els.settlementOnAccount.value) === 0) els.settlementOnAccount.value = '';
+    // Editing a voucher saved under the earlier rule with part of it not adjusted to invoices.
+    state.settlementLegacyGapMinor = Math.max(0, state.pendingSettlementAmountMinor - settlementBillsMinor());
     state.pendingSettlementAmountMinor = null;
+    if (state.settlementLegacyGapMinor) {
+      showToast(`${minorToMoney(state.settlementLegacyGapMinor)} of this voucher is not adjusted to invoices. Tick invoices for it, or clear the party to keep it unadjusted.`);
+    }
   }
   updateSettlementSummary();
   applySettlementLock();
@@ -2314,16 +2335,16 @@ function renderVoucherMode() {
   if (saleAssets.some((asset) => asset.id === selectedSoldAsset)) els.fixedAssetSaleSelect.value = selectedSoldAsset;
   if (invoice || settlement) {
     const selectedParty = els.voucherParty.value;
-    // Customers: personal accounts of asset type (Receivables or any head the user created);
-    // suppliers: personal accounts of liability type.
-    const partyTypeId = customerSide ? 'asset' : 'liability';
+    // Customers: personal accounts under the built-in Receivables head (102000, any sub-head);
+    // suppliers: under Payables (201000). These head codes cannot be changed.
+    const partyHeadCode = customerSide ? '102000' : '201000';
     const parties = state.accounts.filter((account) =>
-      account.isPersonal && !account.isSystem && account.typeId === partyTypeId
+      account.isPersonal && !account.isSystem && account.headCode === partyHeadCode
     );
     const word = customerSide ? 'customer' : 'supplier';
     renderOptions(els.voucherParty, parties, {
       label: (account) => `${accountLabel(account)}${account.state ? ` | ${stateLabel(account.state)}` : ''}`,
-      empty: parties.length ? `Select ${word}` : `No ${word}s yet — use + New`
+      empty: parties.length ? `No ${word} (unadjusted)` : `No ${word}s yet — use + New`
     });
     els.newPartyAccount.textContent = `+ New ${word}`;
     if (parties.some((account) => account.id === selectedParty)) els.voucherParty.value = selectedParty;
@@ -2511,7 +2532,7 @@ function refreshVoucherEditorOptions() {
 
 function resetVoucherLinesForType() {
   state.pendingSettlementAmountMinor = null;
-  els.settlementOnAccount.value = '';
+  state.settlementLegacyGapMinor = 0;
   els.voucherLines.innerHTML = '';
   els.invoiceItems.innerHTML = '';
   els.settlementBills.innerHTML = '';
@@ -2596,8 +2617,8 @@ function fillVoucherForm(voucherId) {
       partyLine: isSettlementType(voucher.type) && line.accountId === voucher.partyAccountId
         && Boolean(voucher.type === 'receipt' ? line.creditMinor : line.debitMinor)
     }));
-    els.settlementOnAccount.value = '';
-    state.pendingSettlementAmountMinor = isSettlementType(voucher.type) ? settlementVoucherAmountMinor() : null;
+    state.settlementLegacyGapMinor = 0;
+    state.pendingSettlementAmountMinor = isSettlementType(voucher.type) && voucher.partyAccountId ? settlementVoucherAmountMinor() : null;
     loadOpenBills().catch((error) => showToast(error.message));
   }
 }
@@ -2976,10 +2997,9 @@ function bindEvents() {
   els.newPartyAccount.addEventListener('click', () => openCoaForVoucher('party'));
   els.newLineAccount.addEventListener('click', () => openCoaForVoucher('line'));
   els.coaReturnCancel.addEventListener('click', () => returnToEntries(null));
-  els.settlementOnAccount.addEventListener('input', applySettlementLock);
   els.voucherParty.addEventListener('change', () => {
     if (isSettlementType()) {
-      els.settlementOnAccount.value = '';
+      state.settlementLegacyGapMinor = 0;
       applySettlementLock();
       loadOpenBills().catch((error) => showToast(error.message));
     } else {
@@ -3009,9 +3029,8 @@ function bindEvents() {
     event.preventDefault();
     if (isSettlementType()) {
       const word = els.voucherType.value === 'receipt' ? 'customer' : 'supplier';
-      if (!els.voucherParty.value) return showToast(`Select the ${word} first.`);
-      if (!settlementTotalMinor()) {
-        return showToast('Tick the bill(s) this amount settles, or enter an On account / advance amount.');
+      if (els.voucherParty.value && !settlementTotalMinor()) {
+        return showToast(`Tick the invoice(s) this amount settles, or clear the ${word} to record it as unadjusted.`);
       }
       if ([...els.settlementBills.querySelectorAll('.settlement-amount')].some((input) => !input.checkValidity())) {
         return showToast('An amount is more than that bill’s outstanding balance.');
