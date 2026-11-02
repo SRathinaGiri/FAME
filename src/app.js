@@ -511,7 +511,7 @@ function hideInstallNotice() {
   els.installNotice.classList.add('hidden');
 }
 
-const APP_RELEASES_URL = 'https://github.com/SRathinaGiri/FAME/releases/latest';
+const APP_RELEASES_URL = 'https://github.com/SRathinaGiri/FAME/releases';
 function renderInstallNotice() {
   if (window.FAME_PLATFORM) {
     hideInstallNotice();

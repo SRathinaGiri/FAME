@@ -5,7 +5,7 @@ Financial Accounting under Modern Environment.
 ## Install F.A.M.E
 
 F.A.M.E is distributed as a **Windows app** and an **Android app**. Download the latest version from
-[Releases](https://github.com/SRathinaGiri/FAME/releases/latest):
+[Releases](https://github.com/SRathinaGiri/FAME/releases):
 
 | Device | File | How to install |
 | --- | --- | --- |
