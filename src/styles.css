@@ -1319,3 +1319,8 @@ body.vault-locked .app-shell {
 #dashboardView .split-grid {
   grid-template-columns: repeat(auto-fit, minmax(min(560px, 100%), 1fr));
 }
+
+/* Long notes in empty table rows wrap instead of widening the page. */
+td.empty {
+  white-space: normal;
+}
