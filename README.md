@@ -4,34 +4,30 @@ Financial Accounting under Modern Environment.
 
 ## Install F.A.M.E
 
-End users do not need to download the source code, install Node.js, or run
-commands.
+F.A.M.E is distributed as a **Windows app** and an **Android app**. Download the latest version from
+[Releases](https://github.com/SRathinaGiri/FAME/releases/latest):
 
-1. Open [F.A.M.E](https://srathingiri.github.io/FAME/) in Google Chrome or
-   Microsoft Edge. These browsers are recommended for installation.
-2. Install the application using one of these options:
-   - Click **Install F.A.M.E** if the button appears inside F.A.M.E.
-   - In Edge, click the **App available** icon in the address bar, or open
-     **... > Apps > Install F.A.M.E**.
-   - In Chrome, click the install icon in the address bar, or open the browser
-     menu and select **Install F.A.M.E**.
-3. Launch F.A.M.E from the desktop, Start menu, or home screen like a normal
-   application.
+| Device | File | How to install |
+| --- | --- | --- |
+| Windows 10/11 | `FAME-Windows-Setup-v….exe` | Run it. If SmartScreen warns about an unknown publisher, choose **More info › Run anyway**. |
+| Android 7+ | `FAME-v….apk` | Open it on the phone and allow **Install unknown apps** for your browser or file manager when asked. |
 
-After the first successful load, the installed PWA can work offline. Application
-data is stored locally on the user's device, so encrypted backups should be
-created regularly.
+On first start, choose a passphrase. Your books are kept in an encrypted database file on the
+device, with automatic daily backups in `Documents/FAME/Backups`. There is no way to recover a
+forgotten passphrase.
 
-Firefox installation support depends on the operating system and Firefox
-version. Its browser menu or address bar may provide a web-app installation
-option, but F.A.M.E's own install button may not appear. Use Chrome or Edge for
-the simplest installation experience.
+### The web (PWA) version is retired
 
-Downloading the GitHub source code is only necessary for developers. Do not
-double-click `index.html`; browser security prevents the SQLite WASM module and
-its database worker from running from a `file://` URL.
+The browser version kept the books in browser storage, which the browser can clear without asking.
+It no longer offers installation and only shows a notice to move to the app. To move your data:
 
-F.A.M.E is a local-first accounting PWA built as a self-contained browser app. The first module includes:
+1. Open the web version, go to **Backup › Export Backup** and save the JSON file (set a password if you like).
+2. Install the Windows or Android app and create your encrypted database.
+3. In the app, go to **Backup › Import Backup** and choose that file.
+
+Downloading the source code is only necessary for developers.
+
+F.A.M.E is a local-first accounting app. The first module includes:
 
 - PWA shell and offline cache
 - SQLite WASM database running in a module worker
@@ -52,8 +48,8 @@ F.A.M.E is a local-first accounting PWA built as a self-contained browser app. T
 
 ## Windows and Android apps
 
-F.A.M.E also ships as a Windows desktop app and an Android app. They run the same accounting
-engine as the PWA, but **nothing is kept in browser storage**: the books live in an encrypted
+F.A.M.E ships as a Windows desktop app and an Android app. They run the same accounting
+engine as the retired PWA, but **nothing is kept in browser storage**: the books live in an encrypted
 database file on the device.
 
 | | Windows | Android |
@@ -73,8 +69,8 @@ database file on the device.
   (`FAME-YYYY-MM-DD.fame`, last 14 days kept, plus `FAME-latest.fame`). The same `.fame` file opens on
   either platform with the passphrase that was in use when it was made. Restoring keeps the replaced
   data as `FAME-before-restore-….fame`.
-- **Moving from the PWA.** Export a JSON backup in the browser version (Backup › Backup Export),
-  create the encrypted database in the app, then use Backup › Backup Import.
+- **Moving from the PWA.** Export a JSON backup in the browser version (Backup › Export Backup),
+  create the encrypted database in the app, then use Backup › Import Backup.
 - Android cloud backup and device-to-device transfer are switched off for the app's data; keep the
   `.fame` files somewhere safe yourself (use "Share latest backup…" to send one to Drive).
 
@@ -145,15 +141,7 @@ The app is static after build and can be hosted by any server that sends the req
 
 ## GitHub Pages
 
-Pushing to `main` deploys the app to GitHub Pages with the `/FAME/` base path:
-
-```text
-https://srathingiri.github.io/FAME/
-```
-
-GitHub Pages does not provide configurable COOP/COEP response headers. F.A.M.E therefore uses:
-
-- OPFS-backed SQLite when the host/browser supports the required isolation headers
-- IndexedDB-mirrored SQLite fallback on GitHub Pages, so installed mobile use can still keep local data
-
-Export/import remains the recommended backup path before changing phones, clearing browser storage, or reinstalling. Use optional password encryption when the backup contains sensitive or real accounting data.
+Pushing to `main` still deploys the web build to `https://srathingiri.github.io/FAME/`, but only so
+that existing browser users can export their data: it shows a retirement notice and no install
+option. Once users have moved, switch it off in **Settings › Pages** (Source: *None*) and delete
+`.github/workflows/pages.yml`.

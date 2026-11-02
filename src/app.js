@@ -5,7 +5,7 @@ import { initMasterImport } from './master-import.js';
 const moneyFormatter = new Intl.NumberFormat('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const quantityFormatter = new Intl.NumberFormat('en-IN', { maximumFractionDigits: 3 });
 const appLocale = 'en-IN';
-const APP_VERSION = 'v32';
+const APP_VERSION = 'v33';
 const indiaStates = [
   ['AP', 'Andhra Pradesh'],
   ['AR', 'Arunachal Pradesh'],
@@ -69,7 +69,6 @@ const state = {
   reportDatesInitialized: false,
   voucherReportReturn: null,
   serviceWorkerReloaded: sessionStorage.getItem('fame-sw-reloaded') === '1',
-  installPrompt: null,
   installMode: null,
   settlementRequestId: 0
 };
@@ -499,14 +498,11 @@ function showToast(message) {
   showToast.timer = setTimeout(() => els.toast.classList.add('hidden'), 3200);
 }
 
-function isStandaloneApp() {
-  return window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true;
-}
-
 function setInstallNotice(mode, message, buttonText) {
   state.installMode = mode;
   els.installNoticeText.textContent = message;
   els.installButton.textContent = buttonText;
+  els.installNotice.classList.toggle('retired', mode === 'retired');
   els.installNotice.classList.remove('hidden');
 }
 
@@ -515,20 +511,19 @@ function hideInstallNotice() {
   els.installNotice.classList.add('hidden');
 }
 
+const APP_RELEASES_URL = 'https://github.com/SRathinaGiri/FAME/releases/latest';
 function renderInstallNotice() {
-  if (isStandaloneApp() || window.FAME_PLATFORM) {
+  if (window.FAME_PLATFORM) {
     hideInstallNotice();
     return;
   }
-  if (state.installPrompt) {
-    setInstallNotice('install', 'Install F.A.M.E for desktop and offline use.', 'Install App');
-    return;
-  }
-  if (localStorage.getItem('fame-install-reminder-version') !== APP_VERSION) {
-    setInstallNotice('guide', 'Install F.A.M.E for desktop and offline use.', 'Install App');
-    return;
-  }
-  hideInstallNotice();
+  if (state.installMode === 'update') return;
+  // The browser (PWA) version is retired: the browser can clear its storage, and the books with it.
+  setInstallNotice(
+    'retired',
+    'The web version is retired. Your books are kept in this browser, which can clear them. Use Backup › Export Backup, then import it into the Windows or Android app.',
+    'Get the app'
+  );
 }
 
 function showUpdateNotice() {
@@ -3262,28 +3257,16 @@ function bindEvents() {
     await refreshSnapshot();
     showToast('Backup imported.');
   });
-  window.addEventListener('beforeinstallprompt', (event) => {
-    event.preventDefault();
-    state.installPrompt = event;
-    renderInstallNotice();
-  });
-  els.installButton.addEventListener('click', async () => {
+  // No more PWA installs: swallow the browser's install offer.
+  window.addEventListener('beforeinstallprompt', (event) => event.preventDefault());
+  els.installButton.addEventListener('click', () => {
     if (state.installMode === 'update') {
       window.location.reload();
       return;
     }
-    if (state.installPrompt) {
-      state.installPrompt.prompt();
-      await state.installPrompt.userChoice;
-      state.installPrompt = null;
-      localStorage.setItem('fame-install-reminder-version', APP_VERSION);
-      renderInstallNotice();
-      return;
-    }
-    localStorage.setItem('fame-install-reminder-version', APP_VERSION);
-    showToast('Use the browser menu or address-bar install icon to install F.A.M.E.');
-    renderInstallNotice();
+    window.open(APP_RELEASES_URL, '_blank', 'noopener');
   });
+
 }
 
 async function prepareServiceWorker() {

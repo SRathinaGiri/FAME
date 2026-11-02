@@ -218,6 +218,16 @@ button.danger:hover {
   flex: 0 0 auto;
 }
 
+.install-notice.retired {
+  max-width: 560px;
+  border-color: #c2410c;
+  background: #fff7ed;
+}
+
+.install-notice.retired span {
+  color: #9a3412;
+}
+
 h1,
 h2 {
   margin: 0;
