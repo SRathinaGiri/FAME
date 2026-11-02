@@ -2,7 +2,7 @@ name: Android App
 
 on:
   push:
-    branches: [native-apps, main]
+    branches: [main]
     paths-ignore: ['**.md', 'desktop/**', '.github/workflows/windows-app.yml', '.github/workflows/pages.yml']
   workflow_dispatch:
 
@@ -128,13 +128,14 @@ jobs:
             --title "F.A.M.E ${APP_VERSION} for Android (build ${VERSION_CODE})" \
             --notes "Built from ${GITHUB_REF_NAME} @ ${GITHUB_SHA::7}. Phone: install the .apk over the previous build; your data is kept. Google Play: upload the .aab (versionCode ${VERSION_CODE})."
 
-      - name: Keep only the newest android release (main only)
+      - name: Keep only this android release (main only)
         if: github.ref_name == 'main' && env.HAS_KEY == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release list --limit 200 --json tagName,createdAt \
-            --jq '[.[] | select(.tagName | startswith("android-"))] | sort_by(.createdAt) | reverse | .[1:][] | .tagName' |
+            --jq '.[] | select(.tagName | startswith("android-")) | .tagName' |
+          grep -vxF "android-v${APP_VERSION}-build${VERSION_CODE}" |
           while read -r tag; do
             echo "Deleting old release $tag"
             gh release delete "$tag" --cleanup-tag --yes

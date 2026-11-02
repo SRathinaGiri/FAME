@@ -2,7 +2,7 @@ name: Windows App
 
 on:
   push:
-    branches: [native-apps, main]
+    branches: [main]
     paths-ignore: ['**.md', 'android/**', '.github/workflows/android-apk.yml', '.github/workflows/pages.yml']
   workflow_dispatch:
 
@@ -72,13 +72,14 @@ jobs:
             --title "F.A.M.E ${APP_VERSION} for Windows (build ${BUILD_NO})" \
             --notes "Windows installer built from ${GITHUB_REF_NAME} @ ${GITHUB_SHA::7}. Run it to install or update; your data is kept."
 
-      - name: Keep only the newest windows release (main only)
+      - name: Keep only this windows release (main only)
         if: github.ref_name == 'main'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release list --limit 200 --json tagName,createdAt \
-            --jq '[.[] | select(.tagName | startswith("windows-"))] | sort_by(.createdAt) | reverse | .[1:][] | .tagName' |
+            --jq '.[] | select(.tagName | startswith("windows-")) | .tagName' |
+          grep -vxF "windows-v${APP_VERSION}-build${BUILD_NO}" |
           while read -r tag; do
             echo "Deleting old release $tag"
             gh release delete "$tag" --cleanup-tag --yes

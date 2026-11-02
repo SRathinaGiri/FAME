@@ -83,8 +83,9 @@ npm run build:desktop && npm start --prefix desktop     # run the Windows app (o
 npm run build:android        # then open android/ in Android Studio, or ./gradlew assembleDebug
 ```
 
-GitHub Actions builds both on every push to `native-apps` (pre-releases) and `main` (official
-release; older ones are removed):
+GitHub Actions builds both on every push to `main` and publishes them as the latest release
+(older releases are removed). Running a workflow by hand on another branch publishes a pre-release
+for testing:
 
 - `.github/workflows/windows-app.yml` → `FAME-Windows-Setup-v….exe`
 - `.github/workflows/android-apk.yml` → signed `FAME-v….apk` and `.aab` (Google Play)
