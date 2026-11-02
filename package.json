@@ -9,7 +9,7 @@
     "preview": "vite preview --host 127.0.0.1",
     "build:android": "node scripts/build-native-web.mjs android && npx cap sync android",
     "build:desktop": "node scripts/build-native-web.mjs desktop",
-    "test:native": "node scripts/test-native-db.mjs && node scripts/test-settlement-rules.mjs && node scripts/test-android-bridge.mjs"
+    "test:native": "node scripts/test-native-db.mjs && node scripts/test-settlement-rules.mjs && node scripts/test-master-import.mjs && node scripts/test-android-bridge.mjs"
   },
   "keywords": [
     "accounting",

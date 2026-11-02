@@ -48,6 +48,7 @@
             </div>
           </details>
           <button class="nav-tab" data-view="tags">Tags</button>
+          <button class="nav-tab" data-view="import">Import Masters</button>
           <button class="nav-tab" data-view="configuration">Configuration</button>
           <button class="nav-tab" data-view="backup">Backup</button>
         </nav>
@@ -574,6 +575,50 @@
             </div>
             <div id="drilldownContent" class="report-content"></div>
           </section>
+        </section>
+
+        <section class="view" id="importView">
+          <div class="split-grid import-grid">
+            <section class="panel">
+              <div class="panel-heading">
+                <div>
+                  <h2>1. Download a template</h2>
+                  <p class="muted-text">Pick the master and the columns you want. Compulsory columns stay in every template.</p>
+                </div>
+              </div>
+              <div class="form-grid">
+                <label>Master<select id="importMaster"></select></label>
+                <p id="importMasterNote" class="field-note"></p>
+                <div class="import-fields-head">
+                  <strong>Columns</strong>
+                  <button id="importSelectAll" type="button" class="secondary">Select / clear optional</button>
+                </div>
+                <div id="importFields" class="import-fields"></div>
+                <label class="checkbox-row"><input id="importIncludeExisting" type="checkbox"> Include existing records (to edit them in bulk)</label>
+                <div class="action-row">
+                  <button id="importDownloadXlsx" type="button">Download Excel template</button>
+                  <button id="importDownloadCsv" type="button" class="secondary">Download CSV template</button>
+                </div>
+              </div>
+            </section>
+            <section class="panel">
+              <div class="panel-heading">
+                <div>
+                  <h2>2. Import the filled file</h2>
+                  <p class="muted-text">The whole file is checked first. If any row has a problem, nothing is imported.</p>
+                </div>
+              </div>
+              <div class="form-grid">
+                <label>Filled template (.xlsx or .csv)<input id="importMasterFile" type="file" accept=".xlsx,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv"></label>
+                <div class="action-row">
+                  <button id="importCheck" type="button" class="secondary">Check file</button>
+                  <button id="importApply" type="button" disabled>Import</button>
+                </div>
+                <div id="importReport" class="import-report"></div>
+                <p class="field-note">An existing record (same code, or same name for products, categories and tags) is updated; a blank cell keeps its current value. For a new chart of accounts, import Heads, then Sub-heads, then Accounts / Customers / Suppliers.</p>
+              </div>
+            </section>
+          </div>
         </section>
 
         <section class="view" id="tagsView">

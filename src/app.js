@@ -1,5 +1,6 @@
 import { dbCall } from './db-client.js';
 import { decryptBackup, encryptBackup } from './crypto.js';
+import { initMasterImport } from './master-import.js';
 
 const moneyFormatter = new Intl.NumberFormat('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const quantityFormatter = new Intl.NumberFormat('en-IN', { maximumFractionDigits: 3 });
@@ -3351,6 +3352,16 @@ async function boot() {
   renderStateOptions(els.accountState);
   renderStateOptions(els.companyState);
   bindEvents();
+  initMasterImport({
+    dbCall,
+    refreshSnapshot,
+    showToast,
+    downloadBlob,
+    escapeHtml,
+    todayIso,
+    getState: () => state,
+    states: indiaStates
+  });
   renderInstallNotice();
   setDateInputValue(els.voucherDate, todayIso());
   setDateInputValue(els.reportToDate, todayIso());

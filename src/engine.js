@@ -121,8 +121,20 @@ function one(sql, bind) {
   return all(sql, bind)[0] || null;
 }
 
+let transactionDepth = 0;
+
+// Nested calls join the outer transaction, so whole-file imports can reuse the save cores.
 function transaction(callback) {
+  if (transactionDepth > 0) {
+    transactionDepth += 1;
+    try {
+      return callback();
+    } finally {
+      transactionDepth -= 1;
+    }
+  }
   exec('BEGIN');
+  transactionDepth = 1;
   try {
     const result = callback();
     exec('COMMIT');
@@ -130,6 +142,8 @@ function transaction(callback) {
   } catch (error) {
     exec('ROLLBACK');
     throw error;
+  } finally {
+    transactionDepth = 0;
   }
 }
 
@@ -678,7 +692,7 @@ function listProductSubcategories() {
   `);
 }
 
-async function saveProductCategory(category = {}) {
+function saveProductCategoryCore(category = {}) {
   const name = String(category.name || '').trim();
   if (!name) throw new Error('Product category name is required.');
   transaction(() => {
@@ -688,6 +702,10 @@ async function saveProductCategory(category = {}) {
       exec('INSERT INTO product_categories (id, name) VALUES (?, ?)', [crypto.randomUUID(), name]);
     }
   });
+}
+
+async function saveProductCategory(category = {}) {
+  saveProductCategoryCore(category);
   await persistIfMirrored();
   return getSnapshot();
 }
@@ -702,7 +720,7 @@ async function deleteProductCategory({ id }) {
   return getSnapshot();
 }
 
-async function saveProductSubcategory(subcategory = {}) {
+function saveProductSubcategoryCore(subcategory = {}) {
   const name = String(subcategory.name || '').trim();
   if (!subcategory.categoryId) throw new Error('Select a product category.');
   if (!name) throw new Error('Product sub-category name is required.');
@@ -721,6 +739,10 @@ async function saveProductSubcategory(subcategory = {}) {
       ]);
     }
   });
+}
+
+async function saveProductSubcategory(subcategory = {}) {
+  saveProductSubcategoryCore(subcategory);
   await persistIfMirrored();
   return getSnapshot();
 }
@@ -735,7 +757,7 @@ async function deleteProductSubcategory({ id }) {
   return getSnapshot();
 }
 
-async function saveProduct(product = {}) {
+function saveProductCore(product = {}) {
   const name = String(product.name || '').trim();
   const kind = String(product.kind || '');
   const category = kind === 'product'
@@ -781,6 +803,10 @@ async function saveProduct(product = {}) {
         product.itcAvailable ? 1 : 0, product.purchaseAccountId, product.salesAccountId]);
     }
   });
+}
+
+async function saveProduct(product = {}) {
+  saveProductCore(product);
   await persistIfMirrored();
   return getSnapshot();
 }
@@ -1168,7 +1194,7 @@ async function suggestCoaCode(payload) {
   return { code: nextCode(payload || {}) };
 }
 
-async function saveCoaItem(item) {
+function saveCoaItemCore(item) {
   const level = item.level;
   const code = String(item.code || '').trim();
   const name = String(item.name || '').trim();
@@ -1271,6 +1297,10 @@ async function saveCoaItem(item) {
       throw new Error('Unknown CoA master level.');
     }
   });
+}
+
+async function saveCoaItem(item) {
+  saveCoaItemCore(item);
   await persistIfMirrored();
   return getSnapshot();
 }
@@ -2863,8 +2893,279 @@ async function importData(backup) {
   return getSnapshot();
 }
 
+/* ---------------- bulk import of masters (all-or-nothing) ---------------- */
+// Each row arrives as { rowNumber, fields } holding only the columns the user filled. A row whose
+// key (account code, product name, ...) already exists updates that record; fields not given keep
+// their current value. Rows go through the same save cores as the forms, so every rule (built-in
+// chart lock, code format, GST rate, personal-account details) applies. Everything runs in one
+// transaction: on any error, or in a dry run, nothing is written.
+
+const given = (fields, key) => Object.prototype.hasOwnProperty.call(fields, key)
+  && fields[key] !== undefined && fields[key] !== null && fields[key] !== '';
+
+function accountTypeIdFrom(value) {
+  const text = String(value || '').trim().toLowerCase();
+  const type = listAccountTypes().find((item) => item.id === text || item.name.toLowerCase() === text
+    || item.name.toLowerCase().replace(/s$/, '') === text.replace(/s$/, ''));
+  if (!type) throw new Error(`Unknown account type "${value}". Use one of: ${listAccountTypes().map((t) => t.name).join(', ')}.`);
+  return type.id;
+}
+
+function tagIdsFromNames(names) {
+  return [...new Set(names.map((name) => String(name).trim()).filter(Boolean))].map((name) => {
+    const tag = one('SELECT id FROM tags WHERE name = ?', [name]);
+    if (tag) return tag.id;
+    const id = crypto.randomUUID();
+    exec('INSERT INTO tags (id, name, color) VALUES (?, ?, ?)', [id, name, '#247d68']);
+    return id;
+  });
+}
+
+function existingTagIds(entityType, entityId) {
+  return all('SELECT tag_id AS id FROM coa_tags WHERE entity_type = ? AND entity_id = ?', [entityType, entityId]).map((row) => row.id);
+}
+
+function importCode(value, label) {
+  const code = String(value || '').trim();
+  if (code && !/^\d{6}$/.test(code)) throw new Error(`${label} "${value}" must be exactly 6 digits.`);
+  return code;
+}
+
+function importHead(f) {
+  const code = importCode(f.code, 'Code');
+  const existing = code ? one('SELECT id, code, name, type_id AS typeId FROM head_accounts WHERE code = ?', [code]) : null;
+  const typeId = given(f, 'type') ? accountTypeIdFrom(f.type) : existing?.typeId;
+  if (!typeId) throw new Error('Account Type is required for a new head.');
+  if (!existing && !given(f, 'name')) throw new Error('Name is required.');
+  saveCoaItemCore({
+    level: 'head',
+    id: existing?.id || null,
+    typeId,
+    code: code || nextCode({ level: 'head', typeId }),
+    name: given(f, 'name') ? f.name : existing.name,
+    tagIds: given(f, 'tags') ? tagIdsFromNames(f.tags) : existing ? existingTagIds('head', existing.id) : []
+  });
+  return existing ? 'updated' : 'created';
+}
+
+function importSubhead(f) {
+  const code = importCode(f.code, 'Code');
+  const existing = code ? one('SELECT id, code, name, head_id AS headId FROM subhead_accounts WHERE code = ?', [code]) : null;
+  let headId = existing?.headId;
+  if (given(f, 'headCode')) {
+    const head = one('SELECT id FROM head_accounts WHERE code = ?', [importCode(f.headCode, 'Head Code')]);
+    if (!head) throw new Error(`Head account ${f.headCode} does not exist.`);
+    headId = head.id;
+  }
+  if (!headId) throw new Error('Head Code is required for a new sub-head.');
+  if (!existing && !given(f, 'name')) throw new Error('Name is required.');
+  saveCoaItemCore({
+    level: 'subhead',
+    id: existing?.id || null,
+    headId,
+    code: code || nextCode({ level: 'subhead', headId }),
+    name: given(f, 'name') ? f.name : existing.name,
+    tagIds: given(f, 'tags') ? tagIdsFromNames(f.tags) : existing ? existingTagIds('subhead', existing.id) : []
+  });
+  return existing ? 'updated' : 'created';
+}
+
+const PARTY_PRESETS = {
+  customers: { headCode: '102000', defaultSubhead: '102100', word: 'customer' },
+  suppliers: { headCode: '201000', defaultSubhead: '201100', word: 'supplier' }
+};
+
+function importAccount(f, preset = null) {
+  const code = importCode(f.code, 'Code');
+  const existing = code ? one(`
+    SELECT id, code, name, subhead_id AS subheadId, opening_balance_minor AS openingBalanceMinor,
+           is_personal AS isPersonal, address, gst_no AS gstNo, pan_no AS panNo, state,
+           registration_1 AS registration1, registration_2 AS registration2, registration_3 AS registration3
+    FROM accounts WHERE code = ?
+  `, [code]) : null;
+  let subheadId = existing?.subheadId;
+  const subheadCode = given(f, 'subheadCode') ? importCode(f.subheadCode, 'Sub-head Code') : (!existing && preset ? preset.defaultSubhead : '');
+  if (subheadCode) {
+    const subhead = one('SELECT id FROM subhead_accounts WHERE code = ?', [subheadCode]);
+    if (!subhead) throw new Error(`Sub-head ${subheadCode} does not exist.`);
+    subheadId = subhead.id;
+  }
+  if (!subheadId) throw new Error('Sub-head Code is required for a new account.');
+  const placed = one(`
+    SELECT h.code AS headCode, h.id AS headId, h.type_id AS typeId
+    FROM subhead_accounts s JOIN head_accounts h ON h.id = s.head_id WHERE s.id = ?
+  `, [subheadId]);
+  if (preset && placed.headCode !== preset.headCode) {
+    throw new Error(`A ${preset.word} must sit under head ${preset.headCode}; sub-head ${subheadCode || ''} is under ${placed.headCode}.`);
+  }
+  if (!existing && !given(f, 'name')) throw new Error('Name is required.');
+  const pick = (key, fallback = '') => (given(f, key) ? f[key] : existing ? existing[key] ?? fallback : fallback);
+  const isPersonal = preset ? true : Boolean(given(f, 'isPersonal') ? f.isPersonal : existing?.isPersonal);
+  saveCoaItemCore({
+    level: 'account',
+    id: existing?.id || null,
+    subheadId,
+    code: code || nextCode({ level: 'account', typeId: placed.typeId, headId: placed.headId, subheadId }),
+    name: pick('name'),
+    openingBalanceMinor: Number(pick('openingBalanceMinor', 0)),
+    isPersonal,
+    address: pick('address'),
+    gstNo: pick('gstNo'),
+    panNo: pick('panNo'),
+    registration1: pick('registration1'),
+    registration2: pick('registration2'),
+    registration3: pick('registration3'),
+    state: pick('state'),
+    tagIds: given(f, 'tags') ? tagIdsFromNames(f.tags) : existing ? existingTagIds('account', existing.id) : []
+  });
+  return existing ? 'updated' : 'created';
+}
+
+function findOrCreateCategory(name) {
+  const clean = String(name || '').trim();
+  let category = one('SELECT id, name FROM product_categories WHERE name = ?', [clean]);
+  if (!category) {
+    saveProductCategoryCore({ name: clean });
+    category = one('SELECT id, name FROM product_categories WHERE name = ?', [clean]);
+  }
+  return category;
+}
+
+function findOrCreateSubcategory(categoryId, name) {
+  const clean = String(name || '').trim();
+  let subcategory = one('SELECT id FROM product_subcategories WHERE category_id = ? AND name = ? COLLATE NOCASE', [categoryId, clean]);
+  if (!subcategory) {
+    saveProductSubcategoryCore({ categoryId, name: clean });
+    subcategory = one('SELECT id FROM product_subcategories WHERE category_id = ? AND name = ? COLLATE NOCASE', [categoryId, clean]);
+  }
+  return subcategory;
+}
+
+function importProductCategory(f) {
+  if (!given(f, 'name')) throw new Error('Name is required.');
+  const existing = one('SELECT id FROM product_categories WHERE name = ?', [String(f.name).trim()]);
+  if (!existing) saveProductCategoryCore({ name: f.name });
+  return existing ? 'updated' : 'created';
+}
+
+function importProductSubcategory(f) {
+  if (!given(f, 'category')) throw new Error('Category is required.');
+  if (!given(f, 'name')) throw new Error('Name is required.');
+  const category = findOrCreateCategory(f.category);
+  const existing = one('SELECT id FROM product_subcategories WHERE category_id = ? AND name = ? COLLATE NOCASE', [category.id, String(f.name).trim()]);
+  if (!existing) saveProductSubcategoryCore({ categoryId: category.id, name: f.name });
+  return existing ? 'updated' : 'created';
+}
+
+function accountIdByCode(code, label) {
+  const account = one('SELECT id FROM accounts WHERE code = ?', [importCode(code, label)]);
+  if (!account) throw new Error(`${label} ${code} does not exist.`);
+  return account.id;
+}
+
+function importProduct(f) {
+  if (!given(f, 'name')) throw new Error('Name is required.');
+  const existing = one(`
+    SELECT id, name, kind, category_id AS categoryId, subcategory_id AS subcategoryId,
+           opening_quantity AS openingQuantity, opening_value_minor AS openingValueMinor,
+           hsn_sac_code AS hsnSacCode, gst_rate AS gstRate, itc_available AS itcAvailable,
+           purchase_account_id AS purchaseAccountId, sales_account_id AS salesAccountId
+    FROM products WHERE name = ?
+  `, [String(f.name).trim()]);
+  const kind = given(f, 'kind') ? String(f.kind).trim().toLowerCase() : existing?.kind;
+  if (!['product', 'service'].includes(kind)) throw new Error('Kind must be Product or Service.');
+  let categoryId = existing?.categoryId || null;
+  let subcategoryId = existing?.subcategoryId || null;
+  if (kind === 'product') {
+    if (given(f, 'category')) {
+      categoryId = findOrCreateCategory(f.category).id;
+      if (!given(f, 'subcategory') && existing?.categoryId !== categoryId) subcategoryId = null;
+    }
+    if (given(f, 'subcategory')) {
+      if (!categoryId) throw new Error('Category is required with a sub-category.');
+      subcategoryId = findOrCreateSubcategory(categoryId, f.subcategory).id;
+    }
+    if (!categoryId || !subcategoryId) throw new Error('A product needs a Category and a Sub-category.');
+  }
+  const purchaseAccountId = given(f, 'purchaseAccountCode') ? accountIdByCode(f.purchaseAccountCode, 'Purchase Account')
+    : existing?.purchaseAccountId || accountIdByCode('501101', 'Purchase Account');
+  const salesAccountId = given(f, 'salesAccountCode') ? accountIdByCode(f.salesAccountCode, 'Sales Account')
+    : existing?.salesAccountId || accountIdByCode(kind === 'service' ? '402101' : '401101', 'Sales Account');
+  const pick = (key, fallback) => (given(f, key) ? f[key] : existing ? existing[key] ?? fallback : fallback);
+  const gstRate = Number(pick('gstRate', 0));
+  if (!Number.isFinite(gstRate) || gstRate < 0 || gstRate > 100) throw new Error(`GST Rate "${f.gstRate}" is not a valid percentage.`);
+  saveProductCore({
+    id: existing?.id || null,
+    name: existing ? existing.name : f.name,
+    kind,
+    categoryId,
+    subcategoryId,
+    openingQuantity: pick('openingQuantity', 0),
+    openingValueMinor: pick('openingValueMinor', 0),
+    hsnSacCode: pick('hsnSacCode', ''),
+    gstRate,
+    itcAvailable: Boolean(pick('itcAvailable', 1)),
+    purchaseAccountId,
+    salesAccountId
+  });
+  return existing ? 'updated' : 'created';
+}
+
+function importTag(f) {
+  if (!given(f, 'name')) throw new Error('Name is required.');
+  const name = String(f.name).trim();
+  const color = given(f, 'color') ? String(f.color).trim() : null;
+  if (color && !/^#[0-9a-f]{6}$/i.test(color)) throw new Error(`Colour "${color}" must look like #247d68.`);
+  const existing = one('SELECT id FROM tags WHERE name = ?', [name]);
+  if (existing) {
+    if (color) exec('UPDATE tags SET color = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?', [color, existing.id]);
+    return 'updated';
+  }
+  exec('INSERT INTO tags (id, name, color) VALUES (?, ?, ?)', [crypto.randomUUID(), name, color || '#247d68']);
+  return 'created';
+}
+
+const MASTER_IMPORTERS = {
+  heads: importHead,
+  subheads: importSubhead,
+  accounts: (f) => importAccount(f),
+  customers: (f) => importAccount(f, PARTY_PRESETS.customers),
+  suppliers: (f) => importAccount(f, PARTY_PRESETS.suppliers),
+  productCategories: importProductCategory,
+  productSubcategories: importProductSubcategory,
+  products: importProduct,
+  tags: importTag
+};
+
+async function importMasters({ master, rows = [], dryRun = true } = {}) {
+  const importer = MASTER_IMPORTERS[master];
+  if (!importer) throw new Error(`Unknown master "${master}".`);
+  if (!rows.length) throw new Error('The file has no data rows.');
+  if (transactionDepth > 0) throw new Error('Another database change is in progress.');
+  const result = { created: 0, updated: 0, errors: [], rows: rows.length };
+  exec('BEGIN');
+  transactionDepth = 1;
+  try {
+    for (const { rowNumber, fields } of rows) {
+      try {
+        result[importer(fields || {})] += 1;
+      } catch (error) {
+        result.errors.push({ rowNumber, message: error.message || String(error) });
+        if (result.errors.length >= 500) break;
+      }
+    }
+  } finally {
+    exec(dryRun || result.errors.length ? 'ROLLBACK' : 'COMMIT');
+    transactionDepth = 0;
+  }
+  result.applied = !dryRun && !result.errors.length;
+  if (result.applied) await persistIfMirrored();
+  return result;
+}
+
 export const handlers = {
   init: engineInfo,
+  importMasters,
   snapshot: getSnapshot,
   suggestCoaCode,
   saveCoaItem,

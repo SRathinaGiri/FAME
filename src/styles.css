@@ -1227,3 +1227,90 @@ body.vault-locked .app-shell {
   text-align: right;
   line-height: 1.35;
 }
+
+/* ---------- Import Masters ---------- */
+.import-grid {
+  grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+}
+
+.import-fields-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.import-fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+  gap: 8px 14px;
+}
+
+.import-field {
+  display: flex !important;
+  align-items: center;
+  gap: 8px;
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.import-field input {
+  width: auto;
+}
+
+.import-field em {
+  margin-left: 4px;
+  color: var(--accent);
+  font-size: 11px;
+  font-style: normal;
+  text-transform: uppercase;
+}
+
+.import-report .table-wrap {
+  max-height: 320px;
+  overflow: auto;
+}
+
+.import-ok,
+.import-bad {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 6px;
+  font-weight: 600;
+}
+
+.import-ok {
+  background: #ecf7f2;
+  color: #10432f;
+}
+
+.import-bad {
+  background: #fdecea;
+  color: var(--danger);
+}
+
+.import-grid .form-grid {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.import-report {
+  min-width: 0;
+}
+
+.import-report table {
+  width: 100%;
+}
+
+.import-report td {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.import-report td:first-child {
+  width: 56px;
+}
+
+#importApply:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
