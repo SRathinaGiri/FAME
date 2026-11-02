@@ -1150,3 +1150,69 @@ body.vault-locked .app-shell {
     margin-bottom: 8px;
   }
 }
+
+/* ---------- Entries: create-account shortcuts and locked party line ---------- */
+.select-with-action {
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+}
+
+.select-with-action select {
+  flex: 1;
+  min-width: 0;
+}
+
+.select-with-action button {
+  flex: none;
+  white-space: nowrap;
+}
+
+.voucher-form tr.party-line select:disabled {
+  opacity: 1;
+  color: var(--ink);
+  background: #eef3f9;
+}
+
+.voucher-form .locked-amount {
+  background: #eef3f9;
+  font-weight: 700;
+  cursor: not-allowed;
+}
+
+.settle-column {
+  width: 64px;
+  text-align: center;
+}
+
+.settle-column input {
+  width: auto;
+}
+
+#settlementFooter td {
+  font-weight: 600;
+}
+
+.coa-return-banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  border-left: 4px solid var(--accent);
+  border-radius: 6px;
+  background: #ecf7f2;
+  color: #10243d;
+  font-weight: 600;
+}
+
+#voucherPartyField {
+  grid-column: span 2;
+}
+
+@media (max-width: 560px) {
+  #voucherPartyField {
+    grid-column: auto;
+  }
+}

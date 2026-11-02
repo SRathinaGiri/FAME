@@ -201,6 +201,10 @@
               </form>
 
               <form id="postingAccountForm" class="form-grid separated-form">
+                <div id="coaReturnBanner" class="coa-return-banner full-width hidden">
+                  <span id="coaReturnText">Creating an account for the voucher in Entries. Saving returns you there with it selected.</span>
+                  <button id="coaReturnCancel" type="button" class="secondary">Cancel and return to Entries</button>
+                </div>
                 <input id="accountItemId" type="hidden">
                 <h3>Account</h3>
                 <label>
@@ -389,7 +393,10 @@
                 </label>
                 <label id="voucherPartyField" class="hidden">
                   <span id="voucherPartyLabel">Customer / Supplier</span>
-                  <select id="voucherParty"></select>
+                  <span class="select-with-action">
+                    <select id="voucherParty"></select>
+                    <button id="newPartyAccount" type="button" class="secondary" title="Create a new customer or supplier account in Chart of Accounts">+ New</button>
+                  </span>
                 </label>
                 <label id="fixedAssetToggleField" class="checkbox-row hidden">
                   <input id="voucherFixedAsset" type="checkbox">
@@ -423,7 +430,7 @@
                 <div class="panel-heading">
                   <div>
                     <h3 id="settlementTitle">Bill Settlement</h3>
-                    <p class="field-note">Enter the amount to apply against each bill. Any balance left unapplied remains on account.</p>
+                    <p class="field-note">Tick each bill this amount settles, or type a part amount against it. Use <b>On account / advance</b> only for money not against any bill. The party line above is filled from this table and cannot be edited directly.</p>
                   </div>
                   <span id="settlementSummary" class="pill">Applied 0.00</span>
                 </div>
@@ -436,10 +443,21 @@
                         <th>Type</th>
                         <th class="amount">Original</th>
                         <th class="amount">Outstanding</th>
+                        <th class="settle-column">Settle</th>
                         <th class="amount">Apply</th>
                       </tr>
                     </thead>
                     <tbody id="settlementBills"></tbody>
+                    <tfoot id="settlementFooter" class="hidden">
+                      <tr>
+                        <td colspan="6">On account / advance (not against any bill)</td>
+                        <td><input id="settlementOnAccount" class="amount-input" inputmode="decimal" placeholder="0.00"></td>
+                      </tr>
+                      <tr class="report-total-row">
+                        <td colspan="6">Total for this voucher</td>
+                        <td id="settlementTotal" class="amount">0.00</td>
+                      </tr>
+                    </tfoot>
                   </table>
                 </div>
               </section>
@@ -474,6 +492,7 @@
               </div>
               <div class="action-row">
                 <button id="addLine" type="button" class="secondary">Add Line</button>
+                <button id="newLineAccount" type="button" class="secondary" title="Create a new account in Chart of Accounts and use it on this voucher">+ New Account</button>
                 <button id="addInvoiceItem" type="button" class="secondary hidden">Add Product / Service</button>
                 <button id="printInvoice" type="button" class="secondary hidden">Print Invoice</button>
                 <button id="downloadInvoicePdf" type="button" class="secondary hidden">Download Invoice PDF</button>
