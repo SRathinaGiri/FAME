@@ -6,7 +6,10 @@
   "scripts": {
     "dev": "vite --host 127.0.0.1",
     "build": "vite build",
-    "preview": "vite preview --host 127.0.0.1"
+    "preview": "vite preview --host 127.0.0.1",
+    "build:android": "node scripts/build-native-web.mjs android && npx cap sync android",
+    "build:desktop": "node scripts/build-native-web.mjs desktop",
+    "test:native": "node scripts/test-native-db.mjs && node scripts/test-android-bridge.mjs"
   },
   "keywords": [
     "accounting",
@@ -18,10 +21,15 @@
   "license": "UNLICENSED",
   "private": true,
   "dependencies": {
+    "@capacitor/android": "^8.6.0",
+    "@capacitor/core": "^8.6.0",
     "@sqlite.org/sqlite-wasm": "^3.53.0-build1",
     "jspdf": "^4.2.1",
     "jspdf-autotable": "^5.0.8",
     "jszip": "^3.10.1",
     "vite": "^8.0.16"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^8.6.0"
   }
 }

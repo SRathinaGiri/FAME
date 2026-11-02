@@ -508,7 +508,7 @@ function hideInstallNotice() {
 }
 
 function renderInstallNotice() {
-  if (isStandaloneApp()) {
+  if (isStandaloneApp() || window.FAME_PLATFORM) {
     hideInstallNotice();
     return;
   }
@@ -2054,6 +2054,11 @@ async function downloadInvoicePdf(voucherId) {
 }
 
 async function printInvoice(voucherId) {
+  // Android WebView has no print pop-up: save the PDF; the notice offers to open it for printing.
+  if (window.FAME_PLATFORM === 'android') {
+    await downloadInvoicePdf(voucherId);
+    return;
+  }
   const printWindow = window.open('', '_blank');
   if (!printWindow) throw new Error('Allow pop-ups to print the invoice.');
   printWindow.opener = null;
@@ -2977,7 +2982,8 @@ function bindEvents() {
 }
 
 async function prepareServiceWorker() {
-  if (!('serviceWorker' in navigator)) return true;
+  // The Windows and Android apps ship their files inside the app; no service worker.
+  if (window.FAME_PLATFORM || !('serviceWorker' in navigator)) return true;
   try {
     navigator.serviceWorker.addEventListener('controllerchange', () => {
       if (!state.serviceWorkerReloaded) return;

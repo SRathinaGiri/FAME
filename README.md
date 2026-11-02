@@ -50,6 +50,58 @@ F.A.M.E is a local-first accounting PWA built as a self-contained browser app. T
 - Full database ZIP-of-CSVs export with Power BI relationship metadata and Power Query guidance
 - New company reset flow with backup prompt
 
+## Windows and Android apps
+
+F.A.M.E also ships as a Windows desktop app and an Android app. They run the same accounting
+engine as the PWA, but **nothing is kept in browser storage**: the books live in an encrypted
+database file on the device.
+
+| | Windows | Android |
+| --- | --- | --- |
+| Shell | Electron (`desktop/`) | Capacitor (`android/`) |
+| Database file | `%APPDATA%\F.A.M.E\data\fame.db` | app-private `databases/fame.db` |
+| Encryption | SQLCipher 4 via SQLite3 Multiple Ciphers | SQLCipher for Android 4.20 |
+| Remembered passphrase (optional) | Windows DPAPI (`safeStorage`) | Android Keystore (AES-GCM) |
+| Automatic backups | `Documents\FAME\Backups` | `Documents/FAME/Backups` |
+| Exports (PDF, Excel, ZIP, JSON) | Windows "Save As" dialog | `Documents/FAME/Exports`, with Open / Share |
+
+- **Passphrase.** On first start the app asks for a passphrase (8+ characters). It derives the
+  database key (SQLCipher 4: PBKDF2-HMAC-SHA512, 256,000 iterations, AES-256). There is no
+  recovery: a forgotten passphrase can only be answered by a backup whose passphrase you know.
+- **Backups.** About a minute after the last change, and whenever the app is closed or sent to the
+  background, an encrypted byte copy of the database is written to `Documents/FAME/Backups`
+  (`FAME-YYYY-MM-DD.fame`, last 14 days kept, plus `FAME-latest.fame`). The same `.fame` file opens on
+  either platform with the passphrase that was in use when it was made. Restoring keeps the replaced
+  data as `FAME-before-restore-….fame`.
+- **Moving from the PWA.** Export a JSON backup in the browser version (Backup › Backup Export),
+  create the encrypted database in the app, then use Backup › Backup Import.
+- Android cloud backup and device-to-device transfer are switched off for the app's data; keep the
+  `.fame` files somewhere safe yourself (use "Share latest backup…" to send one to Drive).
+
+### Building
+
+```bash
+npm ci && npm ci --prefix desktop
+npm run test:native          # encrypted engine end-to-end + Android bridge path
+npm run build:desktop && npm start --prefix desktop     # run the Windows app (on Windows)
+npm run build:android        # then open android/ in Android Studio, or ./gradlew assembleDebug
+```
+
+GitHub Actions builds both on every push to `native-apps` (pre-releases) and `main` (official
+release; older ones are removed):
+
+- `.github/workflows/windows-app.yml` → `FAME-Windows-Setup-v….exe`
+- `.github/workflows/android-apk.yml` → signed `FAME-v….apk` and `.aab` (Google Play)
+
+The Android build needs a permanent signing key in repository secrets
+`ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD` and (if the alias is not `fame`)
+`ANDROID_KEY_ALIAS`. Create one once and keep it safe — every update must be signed with it:
+
+```bash
+keytool -genkeypair -v -keystore fame-release.keystore -alias fame -keyalg RSA -keysize 4096 -validity 10000
+base64 -w0 fame-release.keystore   # paste into ANDROID_KEYSTORE_BASE64
+```
+
 ## Development
 
 ```bash

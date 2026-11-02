@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Files F.A.M.E may hand to the Android share sheet: its exports and encrypted backups. -->
+<paths xmlns:android="http://schemas.android.com/apk/res/android">
+    <external-path name="fame_documents" path="Documents/FAME/" />
+    <external-files-path name="fame_app_files" path="." />
+    <cache-path name="fame_cache" path="." />
+</paths>

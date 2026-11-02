@@ -1,0 +1,42 @@
+{
+  "name": "fame-desktop",
+  "productName": "F.A.M.E",
+  "version": "0.32.0",
+  "description": "F.A.M.E - Financial Accounting under Modern Environment, for Windows",
+  "author": "S Rathina Giri",
+  "private": true,
+  "main": "main.js",
+  "scripts": {
+    "prepare-web": "node ../scripts/build-native-web.mjs desktop",
+    "start": "npm run prepare-web && electron .",
+    "dist:win": "npm run prepare-web && electron-builder --win nsis --x64 --publish never"
+  },
+  "dependencies": {
+    "better-sqlite3-multiple-ciphers": "13.0.3"
+  },
+  "devDependencies": {
+    "electron": "45.2.1",
+    "electron-builder": "26.18.0"
+  },
+  "build": {
+    "appId": "com.srathinagiri.fame.desktop",
+    "productName": "F.A.M.E",
+    "executableName": "FAME",
+    "artifactName": "FAME-Setup-${version}.${ext}",
+    "directories": { "output": "dist", "buildResources": "build" },
+    "files": ["main.js", "preload.js", "db-worker.mjs", "engine/**/*", "app-www/**/*", "package.json"],
+    "asar": true,
+    "asarUnpack": ["**/node_modules/better-sqlite3-multiple-ciphers/**"],
+    "npmRebuild": false,
+    "win": { "target": "nsis", "icon": "build/icon.ico" },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "deleteAppDataOnUninstall": false,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "F.A.M.E"
+    }
+  }
+}

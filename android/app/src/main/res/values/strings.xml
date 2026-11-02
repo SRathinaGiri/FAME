@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">F.A.M.E</string>
+    <string name="title_activity_main">F.A.M.E</string>
+    <string name="package_name">com.srathinagiri.fame</string>
+    <string name="custom_url_scheme">com.srathinagiri.fame</string>
+</resources>

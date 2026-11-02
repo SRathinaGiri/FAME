@@ -990,3 +990,163 @@ textarea {
     font-size: 20px;
   }
 }
+
+/* ---------- Native apps (Windows / Android): unlock screen and device storage panel ---------- */
+body.vault-locked .app-shell {
+  visibility: hidden;
+}
+
+.vault-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: grid;
+  place-items: center;
+  overflow-y: auto;
+  padding: max(16px, env(safe-area-inset-top)) 16px max(16px, env(safe-area-inset-bottom));
+  background: linear-gradient(160deg, #1f3a5f 0%, #13263f 100%);
+}
+
+.vault-card {
+  display: grid;
+  gap: 12px;
+  width: min(440px, 100%);
+  padding: 24px;
+}
+
+.vault-card h2 {
+  margin: 4px 0 0;
+}
+
+.vault-card p {
+  margin: 0;
+}
+
+.vault-card label {
+  display: grid;
+  gap: 6px;
+  font-weight: 600;
+}
+
+.vault-check {
+  display: flex !important;
+  align-items: flex-start;
+  gap: 10px;
+  font-weight: 600;
+}
+
+.vault-check input {
+  width: auto;
+  margin-top: 3px;
+}
+
+.vault-check small {
+  display: block;
+  margin-top: 2px;
+  color: var(--muted);
+  font-weight: 400;
+}
+
+.vault-warning {
+  padding: 10px 12px;
+  border-left: 4px solid #b54708;
+  border-radius: 6px;
+  background: #fffaeb;
+  color: #7a2e0e;
+}
+
+.vault-error {
+  color: var(--danger);
+  font-weight: 600;
+}
+
+.vault-restore {
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+}
+
+.vault-restore[open] {
+  display: grid;
+  gap: 10px;
+}
+
+.vault-restore summary {
+  cursor: pointer;
+  color: var(--primary);
+  font-weight: 600;
+}
+
+.native-device-panel {
+  margin-bottom: 18px;
+}
+
+.native-device-panel .native-status {
+  padding: 16px 18px 0;
+}
+
+.native-device-panel .native-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-start;
+  gap: 10px;
+  padding: 0 18px 16px;
+  border-bottom: 1px solid var(--line);
+}
+
+.native-device-panel h3 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.native-facts {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 6px 16px;
+  margin: 0 0 14px;
+}
+
+.native-facts dt {
+  color: var(--muted);
+}
+
+.native-facts dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.native-forms {
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 0;
+}
+
+.native-notice {
+  position: fixed;
+  left: 50%;
+  bottom: max(18px, env(safe-area-inset-bottom));
+  z-index: 1100;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  max-width: min(560px, calc(100vw - 32px));
+  padding: 12px 14px;
+  border-radius: 8px;
+  background: #10243d;
+  color: #fff;
+  box-shadow: var(--shadow);
+  transform: translateX(-50%);
+  overflow-wrap: anywhere;
+}
+
+.native-notice button {
+  flex: none;
+}
+
+@media (max-width: 560px) {
+  .native-facts {
+    grid-template-columns: 1fr;
+  }
+
+  .native-facts dd {
+    margin-bottom: 8px;
+  }
+}

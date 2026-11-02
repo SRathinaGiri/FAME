@@ -1,0 +1,85 @@
+name: Windows App
+
+on:
+  push:
+    branches: [native-apps, main]
+    paths-ignore: ['**.md', 'android/**', '.github/workflows/android-apk.yml', '.github/workflows/pages.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: write   # to publish the installer as a GitHub release
+
+concurrency:
+  group: windows-app-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            desktop/package-lock.json
+
+      - name: Install
+        run: |
+          npm ci
+          npm ci --prefix desktop
+
+      - name: Test encrypted database engine (on Windows, with the shipped native module)
+        run: npm run test:native
+
+      - name: Read version
+        run: |
+          N=$(node -e "const m=require('fs').readFileSync('src/app.js','utf8').match(/APP_VERSION = 'v([0-9]+)'/); process.stdout.write(m ? m[1] : '')")
+          test -n "$N"
+          echo "APP_VERSION=0.${N}.0" >> "$GITHUB_ENV"
+          echo "BUILD_NO=$((100 + GITHUB_RUN_NUMBER))" >> "$GITHUB_ENV"
+
+      - name: Build installer
+        working-directory: desktop
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+        run: |
+          npm run prepare-web
+          npx electron-builder --win nsis --x64 --publish never -c.extraMetadata.version="$APP_VERSION"
+          ls -la dist
+          cp "dist/FAME-Setup-${APP_VERSION}.exe" "../FAME-Windows-Setup-v${APP_VERSION}-build${BUILD_NO}.exe"
+          echo "EXE_FILE=FAME-Windows-Setup-v${APP_VERSION}-build${BUILD_NO}.exe" >> "$GITHUB_ENV"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.EXE_FILE }}
+          path: ${{ env.EXE_FILE }}
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # main = the official release; other branches publish test builds as pre-releases
+          if [ "$GITHUB_REF_NAME" = "main" ]; then RELEASE_KIND="--latest"; else RELEASE_KIND="--prerelease"; fi
+          gh release create "windows-v${APP_VERSION}-build${BUILD_NO}" "$EXE_FILE" \
+            --target "$GITHUB_SHA" $RELEASE_KIND \
+            --title "F.A.M.E ${APP_VERSION} for Windows (build ${BUILD_NO})" \
+            --notes "Windows installer built from ${GITHUB_REF_NAME} @ ${GITHUB_SHA::7}. Run it to install or update; your data is kept."
+
+      - name: Keep only the newest windows release (main only)
+        if: github.ref_name == 'main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release list --limit 200 --json tagName,createdAt \
+            --jq '[.[] | select(.tagName | startswith("windows-"))] | sort_by(.createdAt) | reverse | .[1:][] | .tagName' |
+          while read -r tag; do
+            echo "Deleting old release $tag"
+            gh release delete "$tag" --cleanup-tag --yes
+          done
