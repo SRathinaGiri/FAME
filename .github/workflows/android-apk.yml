@@ -22,11 +22,13 @@ jobs:
       KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
       KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
     steps:
-      - name: Require the permanent signing key
+      - name: Check for the permanent signing key
         run: |
           if [ -z "$KEYSTORE_B64" ] || [ -z "$KEYSTORE_PASSWORD" ]; then
-            echo "::error::Add the repository secrets ANDROID_KEYSTORE_BASE64 and ANDROID_KEYSTORE_PASSWORD (and ANDROID_KEY_ALIAS if the alias is not 'fame') under Settings → Secrets and variables → Actions. Every APK must be signed with the same key, or Android refuses to update the app without uninstalling it (which deletes its data)."
-            exit 1
+            echo "::warning::No signing key yet: building a DEBUG APK only (no release). Add ANDROID_KEYSTORE_BASE64 and ANDROID_KEYSTORE_PASSWORD (and ANDROID_KEY_ALIAS if not 'fame') under Settings → Secrets and variables → Actions. A debug build cannot be updated by a release build; uninstalling it deletes its data, so use it for testing only."
+            echo "HAS_KEY=false" >> "$GITHUB_ENV"
+          else
+            echo "HAS_KEY=true" >> "$GITHUB_ENV"
           fi
 
       - uses: actions/checkout@v5
@@ -62,7 +64,22 @@ jobs:
           echo "APP_VERSION=0.${N}.0" >> "$GITHUB_ENV"
           echo "VERSION_CODE=$((100 + GITHUB_RUN_NUMBER))" >> "$GITHUB_ENV"
 
+      - name: Build debug APK (no signing key yet)
+        if: env.HAS_KEY == 'false'
+        working-directory: android
+        run: |
+          chmod +x gradlew
+          ./gradlew --no-daemon assembleDebug -PappVersionCode="$VERSION_CODE" -PappVersionName="$APP_VERSION"
+          cp app/build/outputs/apk/debug/app-debug.apk "../FAME-v${APP_VERSION}-build${VERSION_CODE}-DEBUG-test-only.apk"
+
+      - uses: actions/upload-artifact@v4
+        if: env.HAS_KEY == 'false'
+        with:
+          name: FAME-debug-apk-build${{ env.VERSION_CODE }}
+          path: FAME-v*-DEBUG-test-only.apk
+
       - name: Build signed APK and App Bundle (.aab for Google Play)
+        if: env.HAS_KEY == 'true'
         working-directory: android
         run: |
           echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/release.keystore"
@@ -75,6 +92,7 @@ jobs:
           rm -f "$RUNNER_TEMP/release.keystore"
 
       - name: Verify signature
+        if: env.HAS_KEY == 'true'
         run: |
           APK=android/app/build/outputs/apk/release/app-release.apk
           APKSIGNER=$(ls "$ANDROID_HOME"/build-tools/*/apksigner | sort -V | tail -1)
@@ -91,6 +109,7 @@ jobs:
           echo "AAB_FILE=$AAB_OUT" >> "$GITHUB_ENV"
 
       - uses: actions/upload-artifact@v4
+        if: env.HAS_KEY == 'true'
         with:
           name: ${{ env.APK_FILE }}
           path: |
@@ -98,6 +117,7 @@ jobs:
             ${{ env.AAB_FILE }}
 
       - name: Publish release
+        if: env.HAS_KEY == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -109,7 +129,7 @@ jobs:
             --notes "Built from ${GITHUB_REF_NAME} @ ${GITHUB_SHA::7}. Phone: install the .apk over the previous build; your data is kept. Google Play: upload the .aab (versionCode ${VERSION_CODE})."
 
       - name: Keep only the newest android release (main only)
-        if: github.ref_name == 'main'
+        if: github.ref_name == 'main' && env.HAS_KEY == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
