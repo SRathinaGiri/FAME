@@ -1314,3 +1314,8 @@ body.vault-locked .app-shell {
   opacity: 0.45;
   cursor: not-allowed;
 }
+
+/* Dashboard: the two tables stack instead of scrolling sideways on narrower windows. */
+#dashboardView .split-grid {
+  grid-template-columns: repeat(auto-fit, minmax(min(560px, 100%), 1fr));
+}

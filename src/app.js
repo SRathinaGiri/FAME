@@ -2367,6 +2367,7 @@ function renderVoucherMode() {
   els.fixedAssetScrapField.classList.toggle('hidden', !fixedAssetPurchase);
   els.fixedAssetSaleField.classList.toggle('hidden', !fixedAssetSale);
   els.addLine.classList.toggle('hidden', invoice);
+  els.newLineAccount.classList.toggle('hidden', invoice);
   els.addInvoiceItem.classList.toggle('hidden', !invoice);
   const salesInvoice = els.voucherType.value === 'sales';
   const purchaseInvoice = els.voucherType.value === 'purchase';
