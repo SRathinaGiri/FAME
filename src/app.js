@@ -2127,28 +2127,37 @@ function settlementVoucherAmountMinor() {
     ), 0);
 }
 
+function formatAmountInput(input) {
+  const minor = moneyToMinor(input.value);
+  if (input.value.trim() && Number.isFinite(minor)) input.value = minor ? minorToMoney(minor) : '';
+}
+
 function settlementBillsMinor() {
   return getSettlementAllocations().reduce((sum, allocation) => sum + allocation.amountMinor, 0);
 }
 
-function settlementTotalMinor() {
-  return settlementBillsMinor();
+// The amount received / paid from the party, as entered on the locked party line.
+function settlementReceivedMinor() {
+  const row = els.voucherParty.value ? settlementPartyRow() : null;
+  return row ? moneyToMinor(row.querySelector(`.line-${settlementPartySide()}`).value) : 0;
 }
 
 function updateSettlementSummary() {
   if (!isSettlementType()) return;
-  const bills = settlementBillsMinor();
-  els.settlementTotal.textContent = minorToMoney(bills);
+  const adjusted = settlementBillsMinor();
+  els.settlementTotal.textContent = minorToMoney(adjusted);
   if (!els.voucherParty.value) {
     els.settlementSummary.textContent = 'Unadjusted';
     els.settlementSummary.classList.remove('danger');
     return;
   }
-  const gap = state.settlementLegacyGapMinor || 0;
+  const received = settlementReceivedMinor();
+  const gap = received - adjusted;
+  const word = els.voucherType.value === 'receipt' ? 'Received' : 'Paid';
   els.settlementSummary.textContent = gap
-    ? `Adjusted ${minorToMoney(bills)} | ${minorToMoney(gap)} of the saved amount is not adjusted`
-    : `Adjusted ${minorToMoney(bills)}`;
-  els.settlementSummary.classList.toggle('danger', Boolean(gap));
+    ? `${word} ${minorToMoney(received)} | Adjusted ${minorToMoney(adjusted)} | ${gap > 0 ? 'Not adjusted' : 'Over-adjusted'} ${minorToMoney(Math.abs(gap))}`
+    : `${word} ${minorToMoney(received)} | Fully adjusted`;
+  els.settlementSummary.classList.toggle('danger', gap !== 0);
 }
 
 // The line that carries the customer (receipt, credit side) or supplier (payment, debit side).
@@ -2162,11 +2171,70 @@ function settlementPartyRow() {
     || rows.find((row) => row.querySelector(`.line-${settlementPartySide()}:not(:disabled)`));
 }
 
+function setPartyAmount(minor) {
+  const row = settlementPartyRow();
+  if (!row) return;
+  row.querySelector(`.line-${settlementPartySide()}`).value = minor ? minorToMoney(minor) : '';
+  followCounterLine();
+}
+
+// With a single cash / bank line, it carries the same amount as the party line. With extra lines
+// (TDS deducted, bank charges) the user splits that side and the balance check applies.
+function followCounterLine() {
+  const partyRow = settlementPartyRow();
+  if (!partyRow) return;
+  const counterRows = [...els.voucherLines.querySelectorAll('tr')].filter((row) => row !== partyRow);
+  if (counterRows.length !== 1) return;
+  const counterSide = settlementPartySide() === 'credit' ? 'debit' : 'credit';
+  const counterInput = counterRows[0].querySelector(`.line-${counterSide}`);
+  const amount = settlementReceivedMinor();
+  if (counterInput && !counterInput.disabled) counterInput.value = amount ? minorToMoney(amount) : '';
+}
+
 /**
- * Receipts and payments with a party selected: the party line is locked to that customer /
- * supplier and its amount is exactly the total of the invoices ticked below. With a single
- * counter line (cash / bank) that line follows; extra lines (TDS deducted, bank charges) stay
- * editable and the balance check applies.
+ * Splits the amount received across the invoices: amounts typed in "Adjusted Amount" stay as
+ * typed; the other ticked invoices take what is left, oldest first (the table is in date
+ * order), the last one possibly in part. When no amount has been entered yet, ticking an
+ * invoice adjusts it in full and the received amount becomes the total.
+ */
+function distributeSettlement() {
+  const rows = [...els.settlementBills.querySelectorAll('tr[data-invoice-voucher-id]')];
+  const auto = !state.settlementAmountTyped;
+  let remaining = settlementReceivedMinor()
+    - rows.filter((row) => row.dataset.manual === '1')
+      .reduce((sum, row) => sum + moneyToMinor(row.querySelector('.settlement-amount').value), 0);
+  for (const row of rows) {
+    if (row.dataset.manual === '1') continue;
+    const input = row.querySelector('.settlement-amount');
+    const outstanding = Number(input.dataset.maximumMinor || 0);
+    let amount = 0;
+    if (row.querySelector('.settlement-check').checked) {
+      amount = auto ? outstanding : Math.max(0, Math.min(remaining, outstanding));
+      remaining -= amount;
+    }
+    input.value = amount ? minorToMoney(amount) : '';
+    input.setCustomValidity('');
+  }
+  if (auto) setPartyAmount(settlementBillsMinor());
+  renderSettlementBalances();
+  updateVoucherBalance();
+}
+
+function renderSettlementBalances() {
+  els.settlementBills.querySelectorAll('tr[data-invoice-voucher-id]').forEach((row) => {
+    const input = row.querySelector('.settlement-amount');
+    const outstanding = Number(input.dataset.maximumMinor || 0);
+    const adjusted = moneyToMinor(input.value);
+    const cell = row.querySelector('.settlement-balance');
+    cell.textContent = minorToMoney(Math.max(0, outstanding - adjusted));
+    cell.classList.toggle('muted-text', adjusted === 0);
+  });
+}
+
+/**
+ * Receipts and payments with a party selected: the party line's account is locked to that
+ * customer / supplier; its amount is what was received / paid and is adjusted against the
+ * invoices below (in full or in part). Saving needs received = adjusted.
  * With no party selected the voucher is an ordinary, unadjusted receipt / payment: all lines
  * are free, so the customer's account can be credited directly (FIFO can adjust it later).
  */
@@ -2184,46 +2252,42 @@ function applySettlementLock() {
   const partyRow = settlementPartyRow();
   if (!partyRow) return;
   partyRow.dataset.partyLine = '1';
-  const side = settlementPartySide();
   const select = partyRow.querySelector('.line-account');
-  const amountInput = partyRow.querySelector(`.line-${side}`);
   select.value = party;
   select.disabled = true;
   select.title = 'Fixed to the selected party';
-  amountInput.readOnly = true;
-  amountInput.classList.add('locked-amount');
-  amountInput.title = 'Equals the invoices ticked below';
+  const amountInput = partyRow.querySelector(`.line-${settlementPartySide()}`);
+  amountInput.classList.add('party-amount');
+  amountInput.title = 'Amount received / paid; it is adjusted against the invoices below';
   partyRow.classList.add('party-line');
   partyRow.querySelector('.remove-line')?.classList.add('hidden');
-  const total = settlementTotalMinor();
-  amountInput.value = total ? minorToMoney(total) : '';
-  const counterRows = rows.filter((row) => row !== partyRow);
-  // A voucher saved earlier with an unadjusted part: never silently change its cash/bank amount.
-  if (counterRows.length === 1 && !state.settlementLegacyGapMinor) {
-    const counterSide = side === 'credit' ? 'debit' : 'credit';
-    const counterInput = counterRows[0].querySelector(`.line-${counterSide}`);
-    if (counterInput && !counterInput.disabled) counterInput.value = total ? minorToMoney(total) : '';
-  }
   updateVoucherBalance();
 }
 
 function unlockPartyRow(row) {
   row.classList.remove('party-line');
   row.querySelector('.line-account').disabled = false;
-  row.querySelectorAll('.line-debit, .line-credit').forEach((input) => {
-    input.readOnly = false;
-    input.classList.remove('locked-amount');
-  });
+  row.querySelectorAll('.line-debit, .line-credit').forEach((input) => input.classList.remove('party-amount'));
   row.querySelector('.remove-line')?.classList.remove('hidden');
+}
+
+// Typing the received / paid amount on the party line re-splits it over the ticked invoices.
+function onVoucherLineInput(event) {
+  if (isSettlementType() && els.voucherParty.value && event.target.classList.contains('party-amount')) {
+    state.settlementAmountTyped = moneyToMinor(event.target.value) > 0;
+    followCounterLine();
+    distributeSettlement();
+    return;
+  }
+  updateVoucherBalance();
 }
 
 async function loadOpenBills() {
   const requestId = ++state.settlementRequestId;
   if (!isSettlementType() || !els.voucherParty.value) {
     const word = els.voucherType.value === 'receipt' ? 'customer' : 'supplier';
-    els.settlementBills.innerHTML = `<tr><td colspan="7" class="empty">No ${word} selected: this is recorded as an unadjusted ${els.voucherType.value}. Credit / debit the ${word}'s account on a line; it can be adjusted to invoices later (Ledger › FIFO). Select a ${word} above to adjust it against invoices now.</td></tr>`;
+    els.settlementBills.innerHTML = `<tr><td colspan="8" class="empty">No ${word} selected: this is recorded as an unadjusted ${els.voucherType.value}. Credit / debit the ${word}'s account on a line; it can be adjusted to invoices later (Ledger › FIFO). Select a ${word} above to adjust it against invoices now.</td></tr>`;
     els.settlementFooter.classList.add('hidden');
-    state.settlementLegacyGapMinor = 0;
     updateSettlementSummary();
     applySettlementLock();
     return;
@@ -2237,7 +2301,7 @@ async function loadOpenBills() {
   if (requestId !== state.settlementRequestId) return;
   els.settlementBills.innerHTML = bills.length
     ? bills.map((bill) => `
-        <tr data-invoice-voucher-id="${bill.voucherId}">
+        <tr data-invoice-voucher-id="${bill.voucherId}" data-manual="${bill.currentAllocationMinor ? '1' : '0'}">
           <td>${formatDate(bill.voucherDate)}</td>
           <td>${escapeHtml(bill.type === 'sales' || bill.type === 'income'
             ? bill.voucherNo
@@ -2245,41 +2309,38 @@ async function loadOpenBills() {
           <td class="capitalize">${escapeHtml(bill.type)}</td>
           <td class="amount">${minorToMoney(bill.invoiceAmountMinor)}</td>
           <td class="amount">${minorToMoney(bill.outstandingMinor)}</td>
-          <td class="settle-column"><input class="settlement-check" type="checkbox" aria-label="Settle this bill in full"
-            ${bill.currentAllocationMinor && bill.currentAllocationMinor === bill.outstandingMinor ? 'checked' : ''}></td>
+          <td class="settle-column"><input class="settlement-check" type="checkbox" aria-label="Adjust against this invoice"
+            ${bill.currentAllocationMinor ? 'checked' : ''}></td>
           <td><input class="settlement-amount amount-input" inputmode="decimal"
             value="${bill.currentAllocationMinor ? minorToMoney(bill.currentAllocationMinor) : ''}"
             placeholder="0.00" data-maximum-minor="${bill.outstandingMinor}"></td>
+          <td class="amount settlement-balance"></td>
         </tr>
       `).join('')
-    : '<tr><td colspan="7" class="empty">No unpaid invoices for this party as of the voucher date. To record an advance, clear the party above and use the party\'s account on a line.</td></tr>';
+    : '<tr><td colspan="8" class="empty">No unpaid invoices for this party as of the voucher date. To record an advance, clear the party above and use the party\'s account on a line.</td></tr>';
   els.settlementBills.querySelectorAll('tr[data-invoice-voucher-id]').forEach((row) => {
     const input = row.querySelector('.settlement-amount');
     const check = row.querySelector('.settlement-check');
     const maximum = Number(input.dataset.maximumMinor || 0);
     input.addEventListener('input', () => {
       const amount = moneyToMinor(input.value);
-      input.setCustomValidity(amount > maximum ? 'Amount exceeds this bill’s outstanding balance.' : '');
-      check.checked = amount > 0 && amount === maximum;
-      state.settlementLegacyGapMinor = 0;
-      applySettlementLock();
+      input.setCustomValidity(amount > maximum ? 'Amount exceeds this invoice’s outstanding balance.' : '');
+      row.dataset.manual = input.value.trim() ? '1' : '0';
+      check.checked = amount > 0;
+      distributeSettlement();
     });
+    input.addEventListener('change', () => formatAmountInput(input));
     check.addEventListener('change', () => {
-      input.value = check.checked ? minorToMoney(maximum) : '';
-      input.setCustomValidity('');
-      state.settlementLegacyGapMinor = 0;
-      applySettlementLock();
+      row.dataset.manual = '0';
+      distributeSettlement();
     });
   });
   els.settlementFooter.classList.remove('hidden');
-  if (state.pendingSettlementAmountMinor != null) {
-    // Editing a voucher saved under the earlier rule with part of it not adjusted to invoices.
-    state.settlementLegacyGapMinor = Math.max(0, state.pendingSettlementAmountMinor - settlementBillsMinor());
-    state.pendingSettlementAmountMinor = null;
-    if (state.settlementLegacyGapMinor) {
-      showToast(`${minorToMoney(state.settlementLegacyGapMinor)} of this voucher is not adjusted to invoices. Tick invoices for it, or clear the party to keep it unadjusted.`);
-    }
+  if (state.editingVoucherId) {
+    // Reopened voucher: the saved amount and its saved adjustments stay exactly as they were.
+    state.settlementAmountTyped = settlementReceivedMinor() > 0;
   }
+  renderSettlementBalances();
   updateSettlementSummary();
   applySettlementLock();
 }
@@ -2501,7 +2562,8 @@ function addVoucherLine(line = {}) {
     updateVoucherBalance();
   });
   tr.querySelectorAll('input, select').forEach((input) => {
-    input.addEventListener('input', () => (isSettlementType() ? applySettlementLock() : updateVoucherBalance()));
+    input.addEventListener('input', onVoucherLineInput);
+    if (input.matches('.line-debit, .line-credit')) input.addEventListener('change', () => formatAmountInput(input));
     input.addEventListener('focus', () => { state.lastVoucherLineRow = tr; });
   });
   els.voucherLines.append(tr);
@@ -2531,8 +2593,7 @@ function refreshVoucherEditorOptions() {
 }
 
 function resetVoucherLinesForType() {
-  state.pendingSettlementAmountMinor = null;
-  state.settlementLegacyGapMinor = 0;
+  state.settlementAmountTyped = false;
   els.voucherLines.innerHTML = '';
   els.invoiceItems.innerHTML = '';
   els.settlementBills.innerHTML = '';
@@ -2617,8 +2678,6 @@ function fillVoucherForm(voucherId) {
       partyLine: isSettlementType(voucher.type) && line.accountId === voucher.partyAccountId
         && Boolean(voucher.type === 'receipt' ? line.creditMinor : line.debitMinor)
     }));
-    state.settlementLegacyGapMinor = 0;
-    state.pendingSettlementAmountMinor = isSettlementType(voucher.type) && voucher.partyAccountId ? settlementVoucherAmountMinor() : null;
     loadOpenBills().catch((error) => showToast(error.message));
   }
 }
@@ -2999,8 +3058,9 @@ function bindEvents() {
   els.coaReturnCancel.addEventListener('click', () => returnToEntries(null));
   els.voucherParty.addEventListener('change', () => {
     if (isSettlementType()) {
-      state.settlementLegacyGapMinor = 0;
+      state.settlementAmountTyped = false;
       applySettlementLock();
+      setPartyAmount(0);
       loadOpenBills().catch((error) => showToast(error.message));
     } else {
       updateInvoiceTotals();
@@ -3029,8 +3089,13 @@ function bindEvents() {
     event.preventDefault();
     if (isSettlementType()) {
       const word = els.voucherType.value === 'receipt' ? 'customer' : 'supplier';
-      if (els.voucherParty.value && !settlementTotalMinor()) {
-        return showToast(`Tick the invoice(s) this amount settles, or clear the ${word} to record it as unadjusted.`);
+      if (els.voucherParty.value) {
+        const received = settlementReceivedMinor();
+        const adjusted = settlementBillsMinor();
+        if (!received) return showToast(`Enter the amount on the ${word} line, or tick the invoice(s) it settles.`);
+        if (received !== adjusted) {
+          return showToast(`${minorToMoney(received)} must be fully adjusted against invoices (adjusted ${minorToMoney(adjusted)}). Tick another invoice, change the amount, or clear the ${word} to record it as unadjusted.`);
+        }
       }
       if ([...els.settlementBills.querySelectorAll('.settlement-amount')].some((input) => !input.checkValidity())) {
         return showToast('An amount is more than that bill’s outstanding balance.');

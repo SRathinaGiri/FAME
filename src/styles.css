@@ -1216,3 +1216,14 @@ body.vault-locked .app-shell {
     grid-column: auto;
   }
 }
+
+.voucher-form .party-amount {
+  font-weight: 700;
+  border-color: var(--accent);
+}
+
+#settlementSummary {
+  max-width: 340px;
+  text-align: right;
+  line-height: 1.35;
+}

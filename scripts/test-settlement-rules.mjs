@@ -90,6 +90,13 @@ try {
   bills = await db('openBills', { settlementType: 'receipt', partyAccountId: ravi, settlementDate: D });
   assert.deepEqual(bills.map((b) => b.outstandingMinor).sort(), [1000000, 300000].sort());
   ok('clearing the customer on a hand-adjusted receipt releases invoice 1 again');
+
+  // part settlement: 12,000 received against invoices of 10,000 + 3,000 outstanding
+  await db('saveVoucher', { id: r1, ...receipt(1200000, { partyAccountId: ravi, allocations: [
+    { invoiceVoucherId: inv1, amountMinor: 1000000 }, { invoiceVoucherId: inv2, amountMinor: 200000 }] }) });
+  bills = await db('openBills', { settlementType: 'receipt', partyAccountId: ravi, settlementDate: D });
+  assert.deepEqual(bills.map((b) => b.outstandingMinor), [100000]);
+  ok('part settlement: 12,000 split 10,000 + 2,000; invoice 2 keeps 1,000 outstanding (after the 2,000 FIFO receipt)');
   console.log(`\nAll ${step} checks passed.`);
 } finally {
   await worker.terminate();

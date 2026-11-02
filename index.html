@@ -430,7 +430,7 @@
                 <div class="panel-heading">
                   <div>
                     <h3 id="settlementTitle">Bill Settlement</h3>
-                    <p class="field-note" id="settlementNote">Tick each invoice this amount settles, or type a part amount against it. The party line above equals this total and cannot be edited directly. To record an amount not against any invoice, leave the party blank and use the party's account on a line.</p>
+                    <p class="field-note" id="settlementNote">Enter the amount received / paid on the party line, then tick the invoices it settles: it is adjusted oldest first, the last one in part if the amount runs out. Type in Adjusted Amount to split it yourself. The full amount must be adjusted; to record an amount not against any invoice, leave the party blank and use the party's account on a line.</p>
                   </div>
                   <span id="settlementSummary" class="pill">Applied 0.00</span>
                 </div>
@@ -444,14 +444,16 @@
                         <th class="amount">Original</th>
                         <th class="amount">Outstanding</th>
                         <th class="settle-column">Settle</th>
-                        <th class="amount">Apply</th>
+                        <th class="amount">Adjusted Amount</th>
+                        <th class="amount">Balance</th>
                       </tr>
                     </thead>
                     <tbody id="settlementBills"></tbody>
                     <tfoot id="settlementFooter" class="hidden">
                       <tr class="report-total-row">
-                        <td colspan="6">Total for this voucher</td>
+                        <td colspan="6">Total adjusted</td>
                         <td id="settlementTotal" class="amount">0.00</td>
+                        <td></td>
                       </tr>
                     </tfoot>
                   </table>
