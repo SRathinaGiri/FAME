@@ -14,6 +14,8 @@
 
 ### [⬇ Download for Windows or Android](https://github.com/SRathinaGiri/FAME/releases)
 
+**[📖 User manual (PDF, 38 pages)](docs/FAME-User-Manual.pdf)**: every screen explained with screenshots
+
 🪔 *Part of the [Diwali Mega Gift Week 2026](https://srathinagiri.github.io/#gift-week): one free app every day, 6–12 November. Open fresh books this new year.*
 
 </div>
@@ -42,7 +44,7 @@ Open the **[Releases](https://github.com/SRathinaGiri/FAME/releases)** page on t
 
 > The `.aab` file in the Android release is for the Google Play Store. Phone users should install the `.apk`.
 
-**First start:** choose a passphrase (8+ characters). It encrypts your books. **There is no way to recover a forgotten passphrase**, so keep it safe.
+**First start:** choose a passphrase (8+ characters). It encrypts your books. **There is no way to recover a forgotten passphrase**, so keep it safe. The **[user manual](docs/FAME-User-Manual.pdf)** walks through setup, vouchers, GST invoices, settlement, reports and backups.
 
 ## 🔒 Your data
 
